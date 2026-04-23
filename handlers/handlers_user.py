@@ -5,7 +5,7 @@ from bot import sql, x3, bot
 from config import CHANEL_ID, ADMIN_IDS, BOT_URL
 from keyboard import (keyboard_start, keyboard_start_bonus, keyboard_tariff_bonus, keyboard_tariff,
                       keyboard_subscription, ref_keyboard, keyboard_gift_tariff, keyboard_payment_method,
-                      chanel_keyboard, keyboard_tariff_old, keyboard_inline_ref,
+                      chanel_keyboard, keyboard_inline_ref,
                       create_kb, BTN_BACK, keyboard_sub_after_free)
 from logging_config import logger
 import asyncio
