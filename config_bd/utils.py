@@ -572,18 +572,51 @@ class AsyncSQL:
                     Payments.status == 'confirmed',
                 )
                 total_payments += (await session.execute(stmt_pay)).scalar() or 0
+
+                stmt_cards = select(func.coalesce(func.sum(PaymentsCards.amount), 0)).where(
+                    PaymentsCards.user_id.in_(chunk),
+                    PaymentsCards.status == 'confirmed',
+                )
+                total_payments += (await session.execute(stmt_cards)).scalar() or 0
+
+                stmt_platega_crypto = select(func.coalesce(func.sum(PaymentsPlategaCrypto.amount), 0)).where(
+                    PaymentsPlategaCrypto.user_id.in_(chunk),
+                    PaymentsPlategaCrypto.status == 'confirmed',
+                )
+                total_payments += (await session.execute(stmt_platega_crypto)).scalar() or 0
+
+                stmt_fk_sbp = select(func.coalesce(func.sum(PaymentsFkSBP.amount), 0)).where(
+                    PaymentsFkSBP.user_id.in_(chunk),
+                    PaymentsFkSBP.status == 'confirmed',
+                )
+                total_payments += (await session.execute(stmt_fk_sbp)).scalar() or 0
+
                 stmt_wata_sbp = select(func.coalesce(func.sum(PaymentsWataSBP.amount), 0)).where(
                     PaymentsWataSBP.user_id.in_(chunk),
                     PaymentsWataSBP.status == 'confirmed',
                 )
                 total_payments += (await session.execute(stmt_wata_sbp)).scalar() or 0
+
                 stmt_wata_card = select(func.coalesce(func.sum(PaymentsWataCard.amount), 0)).where(
                     PaymentsWataCard.user_id.in_(chunk),
                     PaymentsWataCard.status == 'confirmed',
                 )
                 total_payments += (await session.execute(stmt_wata_card)).scalar() or 0
 
-        total_payments //= 2
+                stmt_stars = select(PaymentsStars.amount).where(
+                    PaymentsStars.user_id.in_(chunk),
+                    PaymentsStars.status == "confirmed",
+                )
+                for (amt,) in (await session.execute(stmt_stars)).all():
+                    total_payments += amt
+
+                stmt_cryptobot = select(func.coalesce(func.sum(PaymentsCryptobot.amount), 0)).where(
+                    PaymentsCryptobot.user_id.in_(chunk),
+                    PaymentsCryptobot.status == "paid",
+                    PaymentsCryptobot.amount > 0.02,
+                )
+                cb_sum = (await session.execute(stmt_cryptobot)).scalar() or 0
+                total_payments += int(round(float(cb_sum)))
 
         return total, with_sub, with_tarif, with_tarif_not_blocked, total_payments, source
 
