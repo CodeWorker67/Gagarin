@@ -128,7 +128,7 @@ class X3:
                 squad = random.choice([squad_1, squad_2])
                 trafficLimitStrategy = "NO_RESET"
                 trafficLimitBytes = 0
-                hwidDeviceLimit = 3
+                hwidDeviceLimit = 5
             desc = 'Gagarin VPN'
             data = {
                 "username": user_id_str,
