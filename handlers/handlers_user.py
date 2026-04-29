@@ -395,7 +395,7 @@ async def inline_partner(inline_query: InlineQuery):
 
 🚀 Высокая скорость канала, надёжные сервера
 🛡 Защита данных, без искусственных лимитов по трафику
-📱 До 3 устройств одновременно
+📱 До 5 устройств одновременно
     '''
 
     result = InlineQueryResultArticle(
