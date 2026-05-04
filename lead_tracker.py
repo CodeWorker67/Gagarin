@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Optional
 
@@ -100,19 +101,33 @@ async def _post_json(path: str, body: dict[str, Any], *, kind: str = "") -> bool
         return False
 
 
+# В Lead Tracker для рефералов в поле source уходит эта метка, а не числовой id реферера.
+TRACKER_SOURCE_REFERRAL = "referal"
+
+
+def _normalize_source_token(val: Any) -> Optional[str]:
+    """Только осмысленная строка; даты из БД в источник не отдаём."""
+    if val is None:
+        return None
+    if isinstance(val, (datetime, date)):
+        return None
+    s = str(val).strip()
+    return s or None
+
+
+def tracker_source_from_ref_and_stamp(ref: Any, stamp: Any) -> Optional[str]:
+    """Если ref не пустой — source для трекера «referal»; иначе stamp (метка из deep link)."""
+    ref_n = _normalize_source_token(ref)
+    if ref_n:
+        return TRACKER_SOURCE_REFERRAL
+    return _normalize_source_token(stamp)
+
+
 def _source_from_row(row: tuple) -> Optional[str]:
-    """ref (2) и stamp (13) из кортежа get_user."""
+    """ref — row[2], stamp — row[14] (см. AsyncSQL.get_user; row[13] — last_broadcast_date!)."""
     ref = row[2] if len(row) > 2 else None
-    stamp = row[13] if len(row) > 13 else None
-    if stamp:
-        s = str(stamp).strip()
-        if s:
-            return s
-    if ref:
-        r = str(ref).strip()
-        if r:
-            return r
-    return None
+    stamp = row[14] if len(row) > 14 else None
+    return tracker_source_from_ref_and_stamp(ref, stamp)
 
 
 async def sync_user_from_db(telegram_user_id: int) -> bool:

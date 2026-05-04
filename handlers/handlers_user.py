@@ -2,7 +2,7 @@ import time
 import requests
 
 from bot import sql, x3, bot
-from lead_tracker import post_user_registered, post_user_trial
+from lead_tracker import post_user_registered, post_user_trial, tracker_source_from_ref_and_stamp
 from config import CHANEL_ID, ADMIN_IDS, BOT_URL
 from keyboard import (keyboard_start, keyboard_start_bonus, keyboard_tariff_bonus, keyboard_tariff,
                       keyboard_subscription, ref_keyboard, keyboard_gift_tariff, keyboard_payment_method,
@@ -117,7 +117,7 @@ async def process_start_command(message: Message, command: Command):
         inserted = await sql.add_user(message.from_user.id, False, False, ref=ref_login, stamp=stamp)
         if inserted:
             logger.info(f'Юзер {message.from_user.id} - {message.from_user.username} добавлен в БД')
-            src = (stamp or ref_login or "").strip() or None
+            src = tracker_source_from_ref_and_stamp(ref_login, stamp)
             await post_user_registered(
                 message.from_user.id,
                 message.from_user.username,
