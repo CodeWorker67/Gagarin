@@ -18,6 +18,16 @@ from lexicon import lexicon
 
 router: Router = Router()
 
+_USER_TUPLE_FIELD_BOOL_3 = 26
+
+_SECRET_TARIFF_PAYMENT_TEXT = (
+    "Секретный тариф\n"
+    "4 сервера из разных стран на выбор.\n"
+    "5 устройств, безлимитный трафик.\n\n"
+    "СКИДКА 40% - 149 руб за месяц\n\n"
+    "Выберите способ оплаты:"
+)
+
 
 # Этот хэндлер срабатывает на команду /start
 @router.message(Command(commands="start"))
@@ -164,7 +174,39 @@ async def direct_connect_vpn_cb(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.in_({'r_7', 'r_30', 'r_90', 'r_240', 'r_white_30'}))
+@router.callback_query(F.data == "r_30secret")
+async def secret_tariff_payment(callback: CallbackQuery):
+    uid = callback.from_user.id
+    user_data = await sql.get_user(uid)
+    if user_data is None:
+        await sql.add_user(uid, False)
+        user_data = await sql.get_user(uid)
+    if user_data is not None and user_data[_USER_TUPLE_FIELD_BOOL_3]:
+        await callback.answer(
+            "Вы уже воспользовались секретным тарифом!",
+            show_alert=True,
+        )
+        return
+    await callback.answer()
+    await callback.message.answer(
+        _SECRET_TARIFF_PAYMENT_TEXT,
+        reply_markup=keyboard_payment_method("r_30secret"),
+    )
+
+
+@router.callback_query(
+    F.data.in_(
+        {
+            'r_7',
+            'r_30',
+            'r_90',
+            'r_120',
+            'r_180',
+            'r_3000',
+            'r_white_30',
+        }
+    )
+)
 async def process_payment_method(callback: CallbackQuery):
     await callback.answer()
     text = lexicon['payment_link']

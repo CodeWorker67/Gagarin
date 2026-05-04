@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 import asyncio
 import os
 import tempfile
@@ -9,22 +9,64 @@ from openpyxl.styles import Alignment, Border, Side
 
 from bot import sql, x3
 from config import ADMIN_IDS
+from config_bd.models import Users
 from logging_config import logger
 from aiogram.types import Message, FSInputFile
 from aiogram.filters import Command
 
 router = Router()
 
+_EXCEL_COL_WIDTH_MAX = 255
 
-@router.message(Command(commands=['export']))
-async def export_database_to_excel(message: Message):
-    """Экспорт базы данных в Excel файл"""
+_USERS_EXPORT_COLUMNS_DEFAULT = (
+    "id",
+    "user_id",
+    "ref",
+    "is_delete",
+    "in_panel",
+    "is_connect",
+    "create_user",
+    "reserve_field",
+    "subscription_end_date",
+    "white_subscription_end_date",
+    "last_notification_date",
+    "last_broadcast_status",
+    "last_broadcast_date",
+    "stamp",
+    "ttclid",
+    "field_bool_3",
+)
+
+
+def _user_sheet_column_names(users_full_columns: bool) -> list[str]:
+    if users_full_columns:
+        return [c.key for c in Users.__table__.columns]
+    return list(_USERS_EXPORT_COLUMNS_DEFAULT)
+
+
+def _excel_scalar(value):
+    if value is None:
+        return value
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+    return value
+
+
+async def _export_database_to_excel_impl(message: Message, *, users_full_columns: bool) -> None:
+    """Экспорт базы в Excel; при users_full_columns на листе users все колонки таблицы."""
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("💫 Эта команда доступна только администраторам.")
         return
 
     try:
-        await message.answer("🔄 Начинаю экспорт базы данных...")
+        start_msg = (
+            "🔄 Начинаю экспорт базы данных (лист users — все колонки)..."
+            if users_full_columns
+            else "🔄 Начинаю экспорт базы данных..."
+        )
+        await message.answer(start_msg)
 
         snapshot = await sql.get_export_snapshot()
 
@@ -45,54 +87,32 @@ async def export_database_to_excel(message: Message):
             wb = openpyxl.Workbook()
             if 'Sheet' in wb.sheetnames:
                 wb.remove(wb['Sheet'])
-            
+
             # --- Лист USERS ---
             ws_users = wb.create_sheet(title="users")
-            users_columns = [
-                'id', 'user_id', 'ref', 'is_delete', 'in_panel', 'is_connect',
-                'create_user', 'reserve_field', 'subscription_end_date',
-                'white_subscription_end_date', 'last_notification_date',
-                'last_broadcast_status', 'last_broadcast_date', 'stamp', 'ttclid',
-            ]
+            users_columns = _user_sheet_column_names(users_full_columns)
             header_alignment = Alignment(horizontal="center", vertical="center")
             thin_border = Border(left=Side(style='thin'), right=Side(style='thin'),
                                  top=Side(style='thin'), bottom=Side(style='thin'))
-            
-            # Заголовки
+
             for col_num, title in enumerate(users_columns, 1):
                 cell = ws_users.cell(row=1, column=col_num, value=title)
                 cell.alignment = header_alignment
                 cell.border = thin_border
-            
-            # Данные
+
             for row_num, user in enumerate(users_list, 2):
-                row_data = [
-                    user.id, user.user_id, user.ref, user.is_delete,
-                    user.in_panel, user.is_connect, user.create_user,
-                    user.reserve_field, user.subscription_end_date,
-                    user.white_subscription_end_date, user.last_notification_date,
-                    user.last_broadcast_status, user.last_broadcast_date,
-                    user.stamp, user.ttclid,
-                ]
+                row_data = [_excel_scalar(getattr(user, name)) for name in users_columns]
                 for col_num, value in enumerate(row_data, 1):
-                    # Форматирование дат
-                    if col_num in (9, 10, 13) and value:  # subscription_end_date, white_subscription_end_date, last_broadcast_date
-                        if isinstance(value, datetime):
-                            value = value.strftime('%Y-%m-%d %H:%M:%S')
-                    elif col_num == 11 and value:  # last_notification_date
-                        if isinstance(value, datetime):
-                            value = value.strftime('%Y-%m-%d')
                     cell = ws_users.cell(row=row_num, column=col_num, value=value)
                     cell.border = thin_border
-            
-            # Автоширина
+
             for col in ws_users.columns:
                 max_len = 0
                 col_letter = col[0].column_letter
                 for cell in col:
                     if cell.value:
                         max_len = max(max_len, len(str(cell.value)))
-                ws_users.column_dimensions[col_letter].width = min(max_len + 2, 50)
+                ws_users.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
             
             # --- Лист PAYMENTS (Platega) ---
             ws_payments = wb.create_sheet(title="payments_sbp")
@@ -119,7 +139,7 @@ async def export_database_to_excel(message: Message):
                 for cell in col:
                     if cell.value:
                         max_len = max(max_len, len(str(cell.value)))
-                ws_payments.column_dimensions[col_letter].width = min(max_len + 2, 50)
+                ws_payments.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
 
             # --- Лист PAYMENTS_FK_SBP (FreeKassa СБП) ---
             ws_fk_sbp = wb.create_sheet(title="payments_fk_sbp")
@@ -150,7 +170,7 @@ async def export_database_to_excel(message: Message):
                 for cell in col:
                     if cell.value:
                         max_len = max(max_len, len(str(cell.value)))
-                ws_fk_sbp.column_dimensions[col_letter].width = min(max_len + 2, 50)
+                ws_fk_sbp.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
 
             wata_columns = ['ID', 'User ID', 'Amount', 'Time Created', 'Is Gift', 'Status', 'Transaction_Id', 'Payload']
 
@@ -175,7 +195,7 @@ async def export_database_to_excel(message: Message):
                 for cell in col:
                     if cell.value:
                         max_len = max(max_len, len(str(cell.value)))
-                ws_wata_sbp.column_dimensions[col_letter].width = min(max_len + 2, 50)
+                ws_wata_sbp.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
 
             ws_wata_card = wb.create_sheet(title="payments_wata_card")
             for col_num, title in enumerate(wata_columns, 1):
@@ -198,7 +218,7 @@ async def export_database_to_excel(message: Message):
                 for cell in col:
                     if cell.value:
                         max_len = max(max_len, len(str(cell.value)))
-                ws_wata_card.column_dimensions[col_letter].width = min(max_len + 2, 50)
+                ws_wata_card.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
 
             # --- Лист PAYMENTS_CARDS (платежи по картам) ---
             ws_payments_cards = wb.create_sheet(title="payments_cards")
@@ -226,7 +246,7 @@ async def export_database_to_excel(message: Message):
                 for cell in col:
                     if cell.value:
                         max_len = max(max_len, len(str(cell.value)))
-                ws_payments_cards.column_dimensions[col_letter].width = min(max_len + 2, 50)
+                ws_payments_cards.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
             
             
             # --- Лист PAYMENTS_STARS ---
@@ -254,7 +274,7 @@ async def export_database_to_excel(message: Message):
                 for cell in col:
                     if cell.value:
                         max_len = max(max_len, len(str(cell.value)))
-                ws_payments_stars.column_dimensions[col_letter].width = min(max_len + 2, 50)
+                ws_payments_stars.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
             
             
             
@@ -284,7 +304,7 @@ async def export_database_to_excel(message: Message):
                 for cell in col:
                     if cell.value:
                         max_len = max(max_len, len(str(cell.value)))
-                ws_platega_crypto.column_dimensions[col_letter].width = min(max_len + 2, 50)
+                ws_platega_crypto.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
             
             
             # --- Лист PAYMENTS_CRYPTOBOT ---
@@ -315,7 +335,7 @@ async def export_database_to_excel(message: Message):
                 for cell in col:
                     if cell.value:
                         max_len = max(max_len, len(str(cell.value)))
-                ws_payments_cryptobot.column_dimensions[col_letter].width = min(max_len + 2, 50)
+                ws_payments_cryptobot.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
             
             # --- Лист GIFTS ---
             ws_gifts = wb.create_sheet(title="gifts")
@@ -340,7 +360,7 @@ async def export_database_to_excel(message: Message):
                 for cell in col:
                     if cell.value:
                         max_len = max(max_len, len(str(cell.value)))
-                ws_gifts.column_dimensions[col_letter].width = min(max_len + 2, 50)
+                ws_gifts.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
             
             # --- Лист ONLINE ---
             ws_online = wb.create_sheet(title="online")
@@ -367,7 +387,7 @@ async def export_database_to_excel(message: Message):
                 for cell in col:
                     if cell.value:
                         max_len = max(max_len, len(str(cell.value)))
-                ws_online.column_dimensions[col_letter].width = min(max_len + 2, 50)
+                ws_online.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
             
             # --- Лист WHITE_COUNTER ---
             ws_white_counter = wb.create_sheet(title="white_counter")
@@ -391,7 +411,7 @@ async def export_database_to_excel(message: Message):
                 for cell in col:
                     if cell.value:
                         max_len = max(max_len, len(str(cell.value)))
-                ws_white_counter.column_dimensions[col_letter].width = min(max_len + 2, 50)
+                ws_white_counter.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
             
             # Заморозка заголовков
             for ws in [ws_users, ws_payments, ws_fk_sbp, ws_wata_sbp, ws_wata_card, ws_payments_cards, ws_payments_stars, ws_platega_crypto,
@@ -443,8 +463,14 @@ async def export_database_to_excel(message: Message):
 
         try:
             now_s = datetime.now().strftime('%d.%m.%Y %H:%M')
+            users_sheet_note = (
+                "🧾 Лист <code>users</code>: все колонки таблицы.\n"
+                if users_full_columns
+                else ""
+            )
             caption = (
                 "📊 Экспорт базы данных (Excel)\n"
+                f"{users_sheet_note}"
                 f"📅 Создано: {now_s}\n\n"
                 "📊 Краткая сводка по платежам:\n"
                 f"├ 👥 Пользователей: {users_count}\n"
@@ -463,6 +489,7 @@ async def export_database_to_excel(message: Message):
             await message.answer_document(
                 document=FSInputFile(export_path),
                 caption=caption,
+                parse_mode="HTML",
             )
         finally:
             try:
@@ -470,7 +497,10 @@ async def export_database_to_excel(message: Message):
             except OSError:
                 pass
 
-        logger.info(f"Администратор {message.from_user.id} экспортировал базу данных в Excel")
+        suffix = " (export_full)" if users_full_columns else ""
+        logger.info(
+            f"Администратор {message.from_user.id} экспортировал базу данных в Excel{suffix}"
+        )
 
     except Exception as e:
         error_message = f"❌ Ошибка при экспорте базы данных: {str(e)}"
@@ -479,7 +509,16 @@ async def export_database_to_excel(message: Message):
         await message.answer(error_message)
 
 
-@router.message(Command("export_panel"))
+@router.message(Command(commands=["export"]))
+async def export_database_to_excel(message: Message):
+    """Экспорт базы данных в Excel файл."""
+    await _export_database_to_excel_impl(message, users_full_columns=False)
+
+
+@router.message(Command(commands=["export_full"]))
+async def export_full_database_to_excel(message: Message):
+    """Как /export, но лист users со всеми колонками таблицы users."""
+    await _export_database_to_excel_impl(message, users_full_columns=True)
 async def export_panel(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
@@ -555,7 +594,7 @@ async def export_panel(message: Message):
         for cell in col:
             if cell.value:
                 max_len = max(max_len, len(str(cell.value)))
-        ws.column_dimensions[col_letter].width = min(max_len + 2, 50)
+        ws.column_dimensions[col_letter].width = min(max_len + 2, _EXCEL_COL_WIDTH_MAX)
 
     # Заморозка заголовка
     ws.freeze_panes = 'A2'

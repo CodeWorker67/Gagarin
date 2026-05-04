@@ -101,7 +101,9 @@ _STYLES_TARIFF = {
     "r_7": STYLE_PRIMARY,
     "r_30": STYLE_PRIMARY,
     "r_90": STYLE_SUCCESS,
-    "r_240": STYLE_SUCCESS,
+    "r_120": STYLE_SUCCESS,
+    "r_180": STYLE_SUCCESS,
+    "r_3000": STYLE_SUCCESS,
     "r_white_30": STYLE_PRIMARY,
     "r_30old": STYLE_PRIMARY,
     "free_vpn": STYLE_SUCCESS,
@@ -112,11 +114,12 @@ def keyboard_tariff_bonus():
     return create_kb(
         1,
         styles=_STYLES_TARIFF,
-        r_7="☄️ 7 дней - 99 руб",
-        r_30="⭐ 30 дней - 199 руб",
-        r_90="🌠 90 дней - 539 руб (выгода -10%)",
-        r_240="🌌 240 дней - 999 руб (выгода -40%)",
-        # r_white_30="📲 Мобильный тариф — 499 руб",
+        r_7="🤌 Неделя — 99 руб",
+        r_30="🤝 30 дней — 249 руб",
+        r_90="👌 90 дней — 539 руб (выгода −40%)",
+        r_180="💪 180 дней — 999 руб (выгода −50%)",
+        r_3000="♾️ Навсегда — 3490 руб",
+        r_white_30="📲 Мобильный тариф — 499 руб",
         free_vpn="🛸 5 дней бесплатно — на борт!",
         back_to_main=BTN_BACK,
     )
@@ -126,11 +129,12 @@ def keyboard_tariff():
     return create_kb(
         1,
         styles={k: v for k, v in _STYLES_TARIFF.items() if k != "free_vpn"},
-        r_7="☄️ 7 дней - 99 руб",
-        r_30="⭐ 30 дней - 199 руб",
-        r_90="🌠 90 дней - 539 руб (выгода -10%)",
-        r_240="🌌 240 дней - 999 руб (выгода -40%)",
-        # r_white_30="📲 Мобильный тариф — 499 руб",
+        r_7="🤌 Неделя — 99 руб",
+        r_30="🤝 30 дней — 249 руб",
+        r_90="👌 90 дней — 539 руб (выгода −40%)",
+        r_180="💪 180 дней — 999 руб (выгода −50%)",
+        r_3000="♾️ Навсегда — 3490 руб",
+        r_white_30="📲 Мобильный тариф — 499 руб",
         back_to_main=BTN_BACK,
     )
 
@@ -139,11 +143,13 @@ def keyboard_tariff_trial():
     return create_kb(
         1,
         styles={k: v for k, v in _STYLES_TARIFF.items() if k != "free_vpn"},
-        r_7="☄️ 7 дней - 99 руб",
-        r_30="⭐ 30 дней - 199 руб",
-        r_90="🌠 90 дней - 539 руб (выгода -10%)",
-        r_240="🌌 240 дней - 999 руб (выгода -40%)",
-        # r_white_30="📲 Мобильный тариф — 499 руб",
+        r_7="🤌 Неделя — 99 руб",
+        r_30="🤝 30 дней — 249 руб",
+        r_90="👌 90 дней — 539 руб (выгода −40%)",
+        r_120="🔥 Акция: 120 дней — 539 руб",
+        r_180="💪 180 дней — 999 руб (выгода −50%)",
+        r_3000="♾️ Навсегда — 3490 руб",
+        r_white_30="📲 Мобильный тариф — 499 руб",
         back_to_main=BTN_BACK,
     )
 
@@ -152,7 +158,8 @@ _STYLES_GIFT = {
     "gift_r_7": STYLE_PRIMARY,
     "gift_r_30": STYLE_PRIMARY,
     "gift_r_90": STYLE_SUCCESS,
-    "gift_r_240": STYLE_SUCCESS,
+    "gift_r_180": STYLE_SUCCESS,
+    "gift_r_3000": STYLE_SUCCESS,
     "gift_r_white_30": STYLE_PRIMARY,
 }
 
@@ -161,11 +168,12 @@ def keyboard_gift_tariff():
     return create_kb(
         1,
         styles=_STYLES_GIFT,
-        gift_r_7="☄️ 7 дней - 99 руб",
-        gift_r_30="⭐ 30 дней - 199 руб",
-        gift_r_90="🌠 90 дней - 539 руб (выгода -10%)",
-        gift_r_240="🌌 240 дней - 999 руб (выгода -40%)",
-        # gift_r_white_30="📲 Мобильный тариф — 499 руб",
+        gift_r_7="🤌 Неделя — 99 руб",
+        gift_r_30="🤝 30 дней — 249 руб",
+        gift_r_90="👌 90 дней — 539 руб (выгода −40%)",
+        gift_r_180="💪 180 дней — 999 руб (выгода −50%)",
+        gift_r_3000="♾️ Навсегда — 3490 руб",
+        gift_r_white_30="📲 Мобильный тариф — 499 руб",
         back_to_main=BTN_BACK,
     )
 

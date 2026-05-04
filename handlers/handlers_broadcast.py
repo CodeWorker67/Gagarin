@@ -67,11 +67,13 @@ CUSTOM_PRESETS = [
     ("connect_vpn", "🚀 Подключить Gagarin VPN", STYLE_PRIMARY),
     ("ref_invite", "🌠 Поделиться приглашением", STYLE_SUCCESS),
     ("buy_gift", "🎁 Подарить подписку", STYLE_SUCCESS),
-    ("r_7", "☄️ 7 дней - 99 руб", STYLE_PRIMARY),
-    ("r_30", "⭐ 30 дней - 199 руб", STYLE_PRIMARY),
-    ("r_90", "🌠 90 дней - 539 руб (выгода -10%)", STYLE_SUCCESS),
-    ("r_240", "🌌 240 дней - 999 руб (выгода -40%)", STYLE_SUCCESS),
-    # ("r_white_30", "📲 Мобильный тариф — 499 руб", STYLE_PRIMARY),
+    ("r_7", "🤌 Неделя — 99 руб", STYLE_PRIMARY),
+    ("r_30", "🤝 30 дней — 249 руб", STYLE_PRIMARY),
+    ("r_90", "👌 90 дней — 539 руб (выгода −40%)", STYLE_SUCCESS),
+    ("r_180", "💪 180 дней — 999 руб (выгода −50%)", STYLE_SUCCESS),
+    ("r_3000", "♾️ Навсегда — 3490 руб", STYLE_SUCCESS),
+    ("r_white_30", "📲 Мобильный тариф — 499 руб", STYLE_PRIMARY),
+    ("r_30secret", "🔒 СЕКРЕТНЫЙ ТАРИФ", STYLE_DANGER),
 ]
 
 

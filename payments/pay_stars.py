@@ -15,7 +15,17 @@ router: Router = Router()
 def get_stars_amount(currency: str, duration: str) -> float:
     """Возвращает цену для тарифа в указанной криптовалюте"""
     prices = {
-        'Stars': {'7': 99, '30': 199, '90': 539, '240': 999, 'white_30': 499}
+        'Stars': {
+            '7': 99,
+            '30': 249,
+            '30secret': 149,
+            '90': 539,
+            '120': 539,
+            '180': 999,
+            '3000': 3490,
+            'white_30': 499,
+            '30old': 99,
+        }
     }
     return prices.get(currency, {}).get(duration, 0)
 
@@ -42,7 +52,8 @@ async def process_payment_stars(callback: CallbackQuery):
     payload = f"user_id:{user_id},duration:{duration},white:{white_flag},gift:{gift_flag},method:stars,amount:{stars_amount}"
 
     prices = [LabeledPrice(label="XTR", amount=stars_amount)]
-    title = f"Оплата подписки {'в подарок другу ' if gift_flag else ''}на {duration} дней."
+    dur_label = "30" if duration == "30secret" else duration
+    title = f"Оплата подписки {'в подарок другу ' if gift_flag else ''}на {dur_label} дней."
     description = lexicon['payment_link_white'] if white_flag else lexicon['payment_link']
     await bot.send_invoice(
         callback.from_user.id,

@@ -91,6 +91,19 @@ class AsyncSQL:
             await session.execute(stmt)
             await session.commit()
 
+    async def update_field_bool_3(self, user_id: int, value: bool):
+        async with self.session_factory() as session:
+            stmt = update(Users).where(Users.user_id == user_id).values(field_bool_3=value)
+            await session.execute(stmt)
+            await session.commit()
+
+    async def reset_field_bool_3_all(self) -> int:
+        """Всем строкам users: field_bool_3 = False. Возвращает число обновлённых записей."""
+        async with self.session_factory() as session:
+            result = await session.execute(update(Users).values(field_bool_3=False))
+            await session.commit()
+            return int(result.rowcount or 0)
+
     async def update_delete(self, user_id: int, booly: bool):
         async with self.session_factory() as session:
             stmt = update(Users).where(Users.user_id == user_id).values(is_delete=booly)

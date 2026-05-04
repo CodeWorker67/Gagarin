@@ -723,3 +723,13 @@ async def send_push_command(message: Message):
         f"✅ Успешно: {success_count}\n"
         f"❌ Ошибок: {fail_count}"
     )
+
+
+@router.message(Command(commands=["reset_bool3"]))
+async def reset_field_bool_3_all_command(message: Message):
+    """Сброс field_bool_3 у всех пользователей (триал / одноразовые акции)."""
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    n = await sql.reset_field_bool_3_all()
+    await message.answer(f"Готово: field_bool_3 = false у {n} записей в users.")
+    logger.info(f"Админ {message.from_user.id}: сброс field_bool_3 для всех, обновлено строк: {n}")
