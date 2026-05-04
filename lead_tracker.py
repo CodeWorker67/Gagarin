@@ -102,7 +102,7 @@ async def _post_json(path: str, body: dict[str, Any], *, kind: str = "") -> bool
 
 
 # В Lead Tracker для рефералов в поле source уходит эта метка, а не числовой id реферера.
-TRACKER_SOURCE_REFERRAL = "referal"
+TRACKER_SOURCE_REFERRAL = "referral"
 
 
 def _normalize_source_token(val: Any) -> Optional[str]:
@@ -116,7 +116,7 @@ def _normalize_source_token(val: Any) -> Optional[str]:
 
 
 def tracker_source_from_ref_and_stamp(ref: Any, stamp: Any) -> Optional[str]:
-    """Если ref не пустой — source для трекера «referal»; иначе stamp (метка из deep link)."""
+    """Если ref не пустой — source для трекера «referral»; иначе stamp (метка из deep link)."""
     ref_n = _normalize_source_token(ref)
     if ref_n:
         return TRACKER_SOURCE_REFERRAL
