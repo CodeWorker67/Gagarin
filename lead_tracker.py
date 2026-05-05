@@ -18,7 +18,16 @@ from config import (
 )
 from logging_config import logger
 
-_TRACKED_PAYMENT_METHODS = frozenset({"stars", "cryptobot", "wata_sbp", "wata_card"})
+_TRACKED_PAYMENT_METHODS = frozenset(
+    {
+        "stars",
+        "cryptobot",
+        "wata_sbp",
+        "wata_card",
+        "fk_sbp",
+        "fk_card",
+    }
+)
 
 
 def _post_body_log_summary(body: dict[str, Any]) -> str:

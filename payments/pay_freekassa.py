@@ -1,23 +1,41 @@
 import hashlib
 import hmac
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 import aiohttp
+from aiogram import Router, F
+from aiogram.types import CallbackQuery
 
 from bot import sql
-from config import API_FREEKASSA, SHOP_ID_FREEKASSA, FREEKASSA_SERVER_IP
+from config import API_FREEKASSA, SHOP_ID_FREEKASSA, FREEKASSA_SERVER_IP, ADMIN_IDS
+from keyboard import keyboard_payment_sbp, create_kb, BTN_BACK
+from lexicon import dct_price, dct_desc, lexicon
 from logging_config import logger
 
+router = Router()
+
 FK_API_BASE = "https://api.fk.life/v1"
+# ID способов в ЛК FreeKassa (orders/create поле i): СБП QR и карта QR — разные.
 FK_PAYMENT_SBP_QR = 44
+FK_PAYMENT_CARD_QR = 36
+# Нижние пороги по ЛК FreeKassa для поля amount (карта QR часто от 50 ₽).
+FK_MIN_AMOUNT_SBP_RUB = 10
+FK_MIN_AMOUNT_CARD_RUB = 50
+
+UiKind = Literal["sbp", "card"]
+
+
+def _fk_payment_system_id(ui_kind: UiKind) -> int:
+    return FK_PAYMENT_SBP_QR if ui_kind == "sbp" else FK_PAYMENT_CARD_QR
+
+
+def _fk_amount_rub(val: str, ui_kind: UiKind) -> int:
+    minimum = FK_MIN_AMOUNT_SBP_RUB if ui_kind == "sbp" else FK_MIN_AMOUNT_CARD_RUB
+    return max(minimum, int(val))
 
 
 def _fk_scalar_for_signature(v: Any) -> str:
-    """
-    Строка для подписи должна совпадать с PHP: ksort + implode('|', $data),
-    где значения приводятся к строке как в PHP (float 99.0 → \"99\", не \"99.0\").
-    """
     if v is None:
         return ""
     if isinstance(v, bool):
@@ -68,13 +86,13 @@ class FreekassaPayment:
                 return data
 
     async def create_order(
-            self,
-            nonce: int,
-            payment_id: str,
-            amount: float,
-            email: str,
-            ip: str,
-            payment_system_id: int = FK_PAYMENT_SBP_QR,
+        self,
+        nonce: int,
+        payment_id: str,
+        amount: float,
+        email: str,
+        ip: str,
+        payment_system_id: int = FK_PAYMENT_SBP_QR,
     ) -> tuple[Dict[str, Any], str]:
         amt = float(amount)
         amount_field: Any = int(amt) if amt.is_integer() else amt
@@ -114,44 +132,55 @@ class FreekassaPayment:
         return await self._raw_post("orders", body)
 
 
-def _parse_fk_order_status(orders_payload: Dict[str, Any]) -> Optional[int]:
-    orders = orders_payload.get("orders")
-    if not orders:
-        return None
-    first = orders[0]
-    return first.get("status")
-
-
 def _payment_url_from_create(data: Dict[str, Any]) -> str:
     return (data.get("location") or data.get("Location") or "").strip()
 
 
-async def pay(val: str, des: str, user_id: str, duration: str, white: bool) -> Dict:
+def _payload_method(ui_kind: UiKind) -> str:
+    return "fk_sbp" if ui_kind == "sbp" else "fk_card"
+
+
+def _db_method(ui_kind: UiKind) -> str:
+    return "fk_qr_sbp" if ui_kind == "sbp" else "fk_qr_card"
+
+
+async def pay(
+    val: str,
+    des: str,
+    user_id: str,
+    duration: str,
+    white: bool,
+    ui_kind: UiKind,
+) -> Dict[str, Any]:
     if not API_FREEKASSA or SHOP_ID_FREEKASSA is None:
         logger.error("FreeKassa: не заданы API_FREEKASSA или SHOP_ID_FREEKASSA")
         return {"status": "error", "url": "", "id": ""}
 
+    pm = _payload_method(ui_kind)
+    amount_rub = _fk_amount_rub(val, ui_kind)
     payload = (
-        f"user_id:{user_id},duration:{duration},white:{white},gift:False,method:fksbp,amount:{int(val)}"
+        f"user_id:{user_id},duration:{duration},white:{white},gift:False,method:{pm},amount:{amount_rub}"
     )
     fk = FreekassaPayment(API_FREEKASSA, SHOP_ID_FREEKASSA)
     nonce = await sql.alloc_fk_api_nonce()
     payment_id = f"fk{user_id}n{nonce}"
     email = f"{user_id}@telegram.org"
 
+    fk_i = _fk_payment_system_id(ui_kind)
     try:
         data, signature = await fk.create_order(
             nonce=nonce,
             payment_id=payment_id,
-            amount=float(val),
+            amount=float(amount_rub),
             email=email,
             ip=FREEKASSA_SERVER_IP,
+            payment_system_id=fk_i,
         )
         url = _payment_url_from_create(data)
         fk_oid = data.get("orderId")
         await sql.add_fk_sbp_payment(
             int(user_id),
-            int(val),
+            amount_rub,
             "pending",
             payment_id,
             int(fk_oid) if fk_oid is not None else None,
@@ -159,40 +188,52 @@ async def pay(val: str, des: str, user_id: str, duration: str, white: bool) -> D
             nonce,
             signature,
             is_gift=False,
+            method=_db_method(ui_kind),
         )
-        logger.info(f"✅ FreeKassa заказ: paymentId={payment_id}, orderId={fk_oid}")
+        logger.info(f"✅ FreeKassa заказ ({pm}, i={fk_i}): paymentId={payment_id}, orderId={fk_oid}")
         return {"status": "pending", "url": url, "id": payment_id}
     except Exception as e:
         logger.error(f"❌ FreeKassa create_order: {e}")
         return {"status": "error", "url": "", "id": ""}
 
 
-async def pay_for_gift(val: str, des: str, user_id: str, duration: str, white: bool) -> Dict:
+async def pay_for_gift(
+    val: str,
+    des: str,
+    user_id: str,
+    duration: str,
+    white: bool,
+    ui_kind: UiKind,
+) -> Dict[str, Any]:
     if not API_FREEKASSA or SHOP_ID_FREEKASSA is None:
         logger.error("FreeKassa: не заданы API_FREEKASSA или SHOP_ID_FREEKASSA")
         return {"status": "error", "url": "", "id": ""}
 
+    pm = _payload_method(ui_kind)
+    amount_rub = _fk_amount_rub(val, ui_kind)
     payload = (
-        f"user_id:{user_id},duration:{duration},white:{white},gift:True,method:fksbp,amount:{int(val)}"
+        f"user_id:{user_id},duration:{duration},white:{white},gift:True,method:{pm},amount:{amount_rub}"
     )
     fk = FreekassaPayment(API_FREEKASSA, SHOP_ID_FREEKASSA)
     nonce = await sql.alloc_fk_api_nonce()
     payment_id = f"fk{user_id}n{nonce}"
     email = f"{user_id}@telegram.org"
 
+    fk_i = _fk_payment_system_id(ui_kind)
     try:
         data, signature = await fk.create_order(
             nonce=nonce,
             payment_id=payment_id,
-            amount=float(val),
+            amount=float(amount_rub),
             email=email,
             ip=FREEKASSA_SERVER_IP,
+            payment_system_id=fk_i,
         )
         url = _payment_url_from_create(data)
         fk_oid = data.get("orderId")
         await sql.add_fk_sbp_payment(
             int(user_id),
-            int(val),
+            amount_rub,
             "pending",
             payment_id,
             int(fk_oid) if fk_oid is not None else None,
@@ -200,12 +241,92 @@ async def pay_for_gift(val: str, des: str, user_id: str, duration: str, white: b
             nonce,
             signature,
             is_gift=True,
+            method=_db_method(ui_kind),
         )
-        logger.info(f"✅ FreeKassa подарок: paymentId={payment_id}, orderId={fk_oid}")
+        logger.info(f"✅ FreeKassa подарок ({pm}, i={fk_i}): paymentId={payment_id}, orderId={fk_oid}")
         return {"status": "pending", "url": url, "id": payment_id}
     except Exception as e:
         logger.error(f"❌ FreeKassa create_order (gift): {e}")
         return {"status": "error", "url": "", "id": ""}
 
 
-# СБП переведён на WATA (pay_wata); хендлер FreeKassa СБП отключён (check_fk остаётся для старых pending).
+def _duration_from_callback(data: str, prefix: str, gift_prefix: str) -> tuple[str, bool]:
+    gift_flag = False
+    if data.startswith(gift_prefix):
+        gift_flag = True
+        duration = data[len(gift_prefix) :]
+    else:
+        duration = data[len(prefix) :]
+    return duration, gift_flag
+
+
+async def _handle_wata_style_callback(callback: CallbackQuery, ui_kind: UiKind) -> None:
+    await callback.answer()
+    data = callback.data or ""
+    prefix = "wata_sbp_r_" if ui_kind == "sbp" else "wata_card_r_"
+    gift_prefix = "wata_sbp_gift_r_" if ui_kind == "sbp" else "wata_card_gift_r_"
+    duration, gift_flag = _duration_from_callback(data, prefix, gift_prefix)
+    desc_key = duration
+    rub_amount = dct_price[duration]
+    if callback.from_user.id in ADMIN_IDS:
+        rub_amount = 10 if ui_kind == "sbp" else 1
+    user_id = str(callback.from_user.id)
+    white_flag = False
+    if "white" in duration:
+        duration = duration.replace("white_", "")
+        white_flag = True
+    if "old" in duration:
+        duration = duration.replace("old", "")
+
+    if gift_flag:
+        payment_info = await pay_for_gift(
+            val=str(rub_amount),
+            des=f"Подписка в подарок {dct_desc[desc_key]}",
+            user_id=user_id,
+            duration=duration,
+            white=white_flag,
+            ui_kind=ui_kind,
+        )
+    else:
+        payment_info = await pay(
+            val=str(rub_amount),
+            des=dct_desc[desc_key],
+            user_id=user_id,
+            duration=duration,
+            white=white_flag,
+            ui_kind=ui_kind,
+        )
+
+    btn = "⚡ Оплатить СБП" if ui_kind == "sbp" else "💳 Оплатить картой РФ"
+    log_label = "FreeKassa (кнопка СБП)" if ui_kind == "sbp" else "FreeKassa (кнопка карта)"
+
+    if payment_info["status"] == "pending":
+        try:
+            text = lexicon["payment_link"]
+            if white_flag:
+                text = lexicon["payment_link_white"]
+            if gift_flag:
+                text += "\n\nДля оплаты <b>подарочной подписки</b> перейдите по ссылке:"
+            else:
+                text += "\n\nДля оплаты тарифа перейдите по ссылке:"
+            await callback.message.edit_text(
+                text=text,
+                reply_markup=keyboard_payment_sbp(btn, payment_info["url"]),
+            )
+            logger.info(
+                f"Юзер {user_id} создал {log_label} {_fk_amount_rub(str(rub_amount), ui_kind)} руб "
+                f"(тариф в боте {rub_amount})"
+            )
+        except Exception as e:
+            logger.error(f"FreeKassa UI: {e}")
+            await callback.message.answer(lexicon["error_payment"], reply_markup=create_kb(1, back_to_main=BTN_BACK))
+
+
+@router.callback_query(F.data.startswith("wata_sbp_"))
+async def process_payment_fk_from_sbp_button(callback: CallbackQuery):
+    await _handle_wata_style_callback(callback, "sbp")
+
+
+@router.callback_query(F.data.startswith("wata_card_"))
+async def process_payment_fk_from_card_button(callback: CallbackQuery):
+    await _handle_wata_style_callback(callback, "card")

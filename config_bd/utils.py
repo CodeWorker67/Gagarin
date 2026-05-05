@@ -815,6 +815,7 @@ class AsyncSQL:
             nonce: int,
             signature: str,
             is_gift: bool = False,
+            method: str = 'fk_qr_sbp',
     ) -> None:
         async with self.session_factory() as session:
             payment = PaymentsFkSBP(
@@ -826,14 +827,14 @@ class AsyncSQL:
                 payload=payload,
                 nonce=nonce,
                 signature=signature,
-                method='fksbp',
+                method=method,
                 is_gift=is_gift,
             )
             session.add(payment)
             try:
                 await session.commit()
                 logger.success(
-                    f"💰 Платёж FreeKassa СБП записан: user_id={user_id}, amount={amount}, is_gift={is_gift}")
+                    f"💰 Платёж FreeKassa записан: user_id={user_id}, amount={amount}, is_gift={is_gift}, method={method}")
             except Exception as e:
                 await session.rollback()
                 logger.error(f"❌ Ошибка записи платежа FreeKassa: {e}")

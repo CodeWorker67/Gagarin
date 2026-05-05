@@ -5,7 +5,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from bot import bot
 from config_bd.models import create_tables
-from payments import pay_stars, pay_cryptobot, pay_platega, pay_wata
+from payments import pay_stars, pay_cryptobot, pay_platega, pay_freekassa
+# from payments import pay_wata
 from sheduler.check_connect import check_connect
 from sheduler.check_cryptobot import check_cryptobot_payments
 from sheduler.check_online import check_online_daily
@@ -39,7 +40,8 @@ async def main() -> None:
     dp.include_router(handlers_export.router)
     dp.include_router(handlers_statistic.router)
     # dp.include_router(pay_platega.router)
-    dp.include_router(pay_wata.router)
+    dp.include_router(pay_freekassa.router)
+    # dp.include_router(pay_wata.router)
     dp.include_router(pay_stars.router)
     dp.include_router(pay_cryptobot.router)
 
@@ -51,7 +53,7 @@ async def main() -> None:
     scheduler.add_job(check_fk, trigger='interval', minutes=1, misfire_grace_time=10)
     scheduler.add_job(check_wata_sbp, trigger='interval', minutes=1, misfire_grace_time=10)
     scheduler.add_job(check_wata_card, trigger='interval', minutes=1, misfire_grace_time=10)
-    scheduler.add_job(check_platega_card, trigger='interval', minutes=1, misfire_grace_time=10)
+    # scheduler.add_job(check_platega_card, trigger='interval', minutes=1, misfire_grace_time=10)
     # scheduler.add_job(check_platega_crypto, trigger='interval', minutes=1, misfire_grace_time=10)
     scheduler.add_job(check_cryptobot_payments, trigger='interval', minutes=1, misfire_grace_time=10)
     scheduler.add_job(send_push_cron, trigger='interval', minutes=30, misfire_grace_time=60)

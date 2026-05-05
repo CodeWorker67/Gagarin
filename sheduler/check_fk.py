@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from typing import Any, List, Optional
 
 from bot import bot, sql
@@ -8,6 +9,33 @@ from lexicon import lexicon
 from logging_config import logger
 from payments.pay_freekassa import FreekassaPayment
 from payments.process_payload import process_confirmed_payment
+
+# Локально закрываем «зависшие» pending, если FreeKassa всё ещё не подтвердила оплату.
+FK_PENDING_MAX_AGE = timedelta(hours=8)
+
+
+def _fk_payment_timed_out(payment: PaymentsFkSBP) -> bool:
+    tc = payment.time_created
+    if tc is None:
+        return False
+    return datetime.now() - tc >= FK_PENDING_MAX_AGE
+
+
+def _resolve_fk_status_after_api(
+    payment: PaymentsFkSBP,
+    row: Optional[dict],
+) -> Optional[str]:
+    """Итоговый статус: confirmed/canceled из API; иначе pending или canceled по таймауту 8 ч."""
+    if row:
+        api_status = _coerce_fk_api_status(row.get("status"))
+        api_local = _fk_status_to_local(api_status)
+        if api_local == "confirmed":
+            return "confirmed"
+        if api_local == "canceled":
+            return "canceled"
+    if _fk_payment_timed_out(payment):
+        return "canceled"
+    return "pending"
 
 
 def _coerce_fk_api_status(raw: Any) -> Optional[int]:
@@ -58,7 +86,7 @@ def _pick_fk_order_row(orders: List[dict], payment: PaymentsFkSBP) -> Optional[d
 
 
 async def check_fk_sbp():
-    """Проверка заказов FreeKassa СБП (API orders)."""
+    """Проверка заказов FreeKassa (API orders)."""
     if not API_FREEKASSA or SHOP_ID_FREEKASSA is None:
         return
 
@@ -67,10 +95,10 @@ async def check_fk_sbp():
     try:
         pending_payments = await sql.get_pending_fk_sbp_payments()
         if not pending_payments:
-            logger.info("✅ Нет платежей FreeKassa СБП со статусом pending")
+            logger.info("✅ Нет платежей FreeKassa со статусом pending")
             return
 
-        logger.info(f"🔍 FreeKassa СБП: проверка {len(pending_payments)} pending")
+        logger.info(f"🔍 FreeKassa: проверка {len(pending_payments)} pending")
 
         processed_count = 0
         confirmed_count = 0
@@ -93,21 +121,19 @@ async def check_fk_sbp():
                     orders_list = result.get("orders") or []
                     row = _pick_fk_order_row(orders_list, payment)
 
-                api_status = _coerce_fk_api_status(row.get("status")) if row else None
+                new_status = _resolve_fk_status_after_api(payment, row)
 
-                new_status = _fk_status_to_local(api_status)
-                if not new_status:
+                if row is None:
                     logger.info(
                         f"FreeKassa {payment_id}: нет заказа в ответе API "
                         f"(fk_order_id={payment.fk_order_id}, orders={len(orders_list)})"
                     )
-                    processed_count += 1
-                    continue
 
                 if new_status != payment.status and new_status:
                     await sql.update_fk_sbp_payment_status(payment_id, new_status)
+                    api_status = _coerce_fk_api_status(row.get("status")) if row else None
                     logger.info(
-                        f"🔄 FreeKassa СБП {payment_id}: {payment.status} → {new_status} (api={api_status})")
+                        f"🔄 FreeKassa {payment_id}: {payment.status} → {new_status} (api={api_status})")
 
                     if new_status == "confirmed":
                         await _process_confirmed_fk(payment)
@@ -123,7 +149,7 @@ async def check_fk_sbp():
                 logger.error(f"❌ Ошибка проверки FreeKassa {payment.transaction_id}: {e}")
 
         logger.info(
-            f"✅ FreeKassa СБП: проверено {processed_count}, подтверждено {confirmed_count}, отменено {canceled_count}")
+            f"✅ FreeKassa: проверено {processed_count}, подтверждено {confirmed_count}, отменено {canceled_count}")
 
     except Exception as e:
         logger.error(f"❌ check_fk_sbp: {e}")
@@ -137,5 +163,4 @@ async def _process_confirmed_fk(payment):
     await process_confirmed_payment(payload)
 
 
-# Совместимость с коротким именем из ТЗ
 check_fk = check_fk_sbp
