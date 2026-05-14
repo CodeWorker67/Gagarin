@@ -377,7 +377,7 @@ async def activate_gift(message: Message, gift_id: str):
 async def video_faq(callback: CallbackQuery):
     await callback.answer()
     await callback.message.answer_video(
-        video='BAACAgIAAxkBAAJ8fGnTjM9QdHcqFHS2EmYuDLts1znHAAKppQAC-Cd4ShaCi7tKyEJPOwQ',
+        video='BAACAgQAAxkBAAEBd7pqBapnC38R3dzNKu9Zq9MpdM-lCAACNBwAAn_LKFAaR91C1lYlbTsE',
         caption=lexicon['video_faq_caption'],
         reply_markup=create_kb(1, back_to_main=BTN_BACK),
     )
