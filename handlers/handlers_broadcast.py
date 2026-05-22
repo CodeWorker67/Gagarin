@@ -66,6 +66,7 @@ CUSTOM_PRESETS = [
     ("buy_vpn", "🎫 Купить подписку", STYLE_SUCCESS),
     ("connect_vpn", "🚀 Подключить Gagarin VPN", STYLE_PRIMARY),
     ("ref_invite", "🌠 Поделиться приглашением", STYLE_SUCCESS),
+    ("partner_earn", "💸 Зарабатывай с нами", STYLE_PRIMARY),
     ("buy_gift", "🎁 Подарить подписку", STYLE_SUCCESS),
     ("r_7", "🤌 Неделя — 99 руб", STYLE_PRIMARY),
     ("r_30", "🤝 30 дней — 249 руб", STYLE_PRIMARY),

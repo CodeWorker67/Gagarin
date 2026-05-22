@@ -519,6 +519,9 @@ async def export_database_to_excel(message: Message):
 async def export_full_database_to_excel(message: Message):
     """Как /export, но лист users со всеми колонками таблицы users."""
     await _export_database_to_excel_impl(message, users_full_columns=True)
+
+
+@router.message(Command(commands=["export_panel"]))
 async def export_panel(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return

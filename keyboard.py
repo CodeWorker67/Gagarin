@@ -74,9 +74,14 @@ def chanel_keyboard():
 def keyboard_start_bonus():
     return create_kb(
         1,
-        styles={"free_vpn": STYLE_SUCCESS, "buy_vpn": STYLE_SUCCESS},
+        styles={
+            "free_vpn": STYLE_SUCCESS,
+            "buy_vpn": STYLE_SUCCESS,
+            "partner_earn": STYLE_SUCCESS,
+        },
         free_vpn="🛸 Попробовать бесплатно",
         buy_vpn="🎫 Купить подписку",
+        partner_earn="💸 Зарабатывай с нами",
     )
 
 
@@ -88,11 +93,13 @@ def keyboard_start():
             "connect_vpn": STYLE_PRIMARY,
             "ref": STYLE_PRIMARY,
             "buy_gift": STYLE_SUCCESS,
+            "partner_earn": STYLE_SUCCESS,
         },
         buy_vpn="🎫 Купить подписку",
         connect_vpn="🚀 Подключить Gagarin VPN",
         ref="🌠 Реферальная программа",
         buy_gift="🎁 Подарить подписку",
+        partner_earn="💸 Зарабатывай с нами",
         # info="💡 Информация",
     )
 
@@ -481,6 +488,51 @@ def keyboard_inline_ref(user_id):
                     style=STYLE_PRIMARY,
                 )
             ]
+        ]
+    )
+
+
+def keyboard_partner_intro():
+    return create_kb(
+        1,
+        styles={
+            "partner_create_link": STYLE_SUCCESS,
+            "back_to_main": STYLE_PRIMARY,
+        },
+        partner_create_link="🔗 Создать партнёрскую ссылку",
+        back_to_main=BTN_BACK,
+    )
+
+
+def keyboard_partner_dashboard():
+    return create_kb(
+        1,
+        styles={
+            "partner_withdraw": STYLE_SUCCESS,
+            "back_to_main": STYLE_PRIMARY,
+        },
+        partner_withdraw="💰 Создать заявку на вывод",
+        back_to_main=BTN_BACK,
+    )
+
+
+def keyboard_partner_withdraw(support_url: str):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✉️ Написать в поддержку",
+                    url=support_url,
+                    style=STYLE_PRIMARY,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="◀️ К партнёрской программе",
+                    callback_data="partner_earn",
+                    style=STYLE_SUCCESS,
+                )
+            ],
         ]
     )
 
