@@ -841,6 +841,117 @@ async def send_push_command(message: Message):
     )
 
 
+_ADD_NEW_USERS_CUTOFF = datetime(2026, 6, 5, 0, 0, 0)
+_ADD_NEW_USERS_PHASE2_EXPIRE = _ADD_NEW_USERS_CUTOFF
+_ADD_NEW_USERS_PROGRESS_EVERY = 1000
+
+
+async def _add_new_users_process_phase(
+    users: list,
+    expire_resolver,
+    admin_chat_id: int,
+    phase_label: str,
+) -> dict:
+    """Добавляет пользователей в панель; expire_resolver(user) -> datetime."""
+    stats = {
+        "total": len(users),
+        "ok": 0,
+        "fail": 0,
+        "skipped_panel": 0,
+        "skipped_non_tg": 0,
+    }
+    for idx, user in enumerate(users, start=1):
+        uid = int(user.user_id)
+        if not is_telegram_chat_id(uid):
+            stats["skipped_non_tg"] += 1
+            await asyncio.sleep(0.02)
+            continue
+        user_id_str = str(uid)
+        panel_resp = await x3.get_user_by_username(user_id_str)
+        if panel_resp and panel_resp.get("response"):
+            stats["skipped_panel"] += 1
+            await sql.update_in_panel(uid)
+            await asyncio.sleep(0.02)
+            continue
+        expire_at = expire_resolver(user)
+        short_uuid = (user.subscribtion or "").strip() or None
+        ok = await x3.add_client_migrate(uid, expire_at, short_uuid=short_uuid)
+        if ok:
+            stats["ok"] += 1
+        else:
+            stats["fail"] += 1
+        if idx % _ADD_NEW_USERS_PROGRESS_EVERY == 0:
+            try:
+                await bot.send_message(
+                    admin_chat_id,
+                    f"{phase_label}: обработано {idx}/{stats['total']}, "
+                    f"добавлено {stats['ok']}, ошибок {stats['fail']}…",
+                )
+            except Exception as notify_err:
+                logger.warning("%s: прогресс админу: %s", phase_label, notify_err)
+        await asyncio.sleep(0.05)
+    return stats
+
+
+@router.message(Command(commands=["add_new_users"]))
+async def add_new_users_command(message: Message):
+    """
+    Миграция в панель из БД:
+    1) subscription_end_date > 2026-06-05 — expireAt из БД;
+    2) остальные с датой — expireAt 2026-06-05 00:00:00.
+    """
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    phase1 = await sql.select_users_subscription_after_cutoff(_ADD_NEW_USERS_CUTOFF)
+    phase2 = await sql.select_users_subscription_on_or_before_cutoff(_ADD_NEW_USERS_CUTOFF)
+
+    await message.answer(
+        "⏳ /add_new_users\n"
+        f"Фаза 1 (дата окончания > {_ADD_NEW_USERS_CUTOFF:%Y-%m-%d %H:%M:%S}): {len(phase1)} чел.\n"
+        f"Фаза 2 (дата есть, ≤ порога): {len(phase2)} чел.\n"
+        "Начинаю…"
+    )
+    admin_chat_id = message.chat.id
+
+    def _expire_from_db(u):
+        dt = u.subscription_end_date
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    s1 = await _add_new_users_process_phase(
+        phase1,
+        _expire_from_db,
+        admin_chat_id,
+        "add_new_users фаза 1",
+    )
+    s2 = await _add_new_users_process_phase(
+        phase2,
+        lambda _u: _ADD_NEW_USERS_PHASE2_EXPIRE.replace(tzinfo=timezone.utc),
+        admin_chat_id,
+        "add_new_users фаза 2",
+    )
+
+    report = (
+        "✅ /add_new_users завершено.\n\n"
+        f"Фаза 1 (> {_ADD_NEW_USERS_CUTOFF:%Y-%m-%d}):\n"
+        f"• В выборке: {s1['total']}\n"
+        f"• Добавлено: {s1['ok']}\n"
+        f"• Уже в панели: {s1['skipped_panel']}\n"
+        f"• Ошибок: {s1['fail']}\n"
+        f"• Не Telegram ID: {s1['skipped_non_tg']}\n\n"
+        f"Фаза 2 (остальные с датой, expireAt {_ADD_NEW_USERS_PHASE2_EXPIRE:%Y-%m-%d}):\n"
+        f"• В выборке: {s2['total']}\n"
+        f"• Добавлено: {s2['ok']}\n"
+        f"• Уже в панели: {s2['skipped_panel']}\n"
+        f"• Ошибок: {s2['fail']}\n"
+        f"• Не Telegram ID: {s2['skipped_non_tg']}"
+    )
+    await message.answer(report)
+    logger.info(f"Админ {message.from_user.id} /add_new_users: {report}")
+
+
 @router.message(Command(commands=["reset_bool3"]))
 async def reset_field_bool_3_all_command(message: Message):
     """Сброс field_bool_3 у всех пользователей (триал / одноразовые акции)."""
