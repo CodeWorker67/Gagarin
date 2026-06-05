@@ -389,8 +389,8 @@ async def check_online(message: Message):
 
 @router.message(Command("balance_panel"))
 async def check_online(message: Message):
-    squad_1 = ['e743960c-ea57-4fab-8d4a-5b77a15246c3']
-    squad_2 = ['13244df4-5b78-4b86-a95e-5794484bf691']
+    squad_1 = ['b8031c60-2861-49ab-a8ec-0fb871c7be23']
+    squad_2 = ['d963e9fb-044a-4188-9938-e34f2eee9650']
     success_count = 0
     fail_count = 0
     if message.from_user.id not in ADMIN_IDS:
