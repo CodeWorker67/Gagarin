@@ -5,6 +5,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import CHANEL_URL, BOT_URL
+from lexicon import dct_desc
 
 # Единый текст «Назад» для импорта из других модулей
 BTN_BACK = "◀️ Назад"
@@ -75,11 +76,9 @@ def keyboard_start_bonus():
     return create_kb(
         1,
         styles={
-            "free_vpn": STYLE_SUCCESS,
             "buy_vpn": STYLE_SUCCESS,
             "partner_earn": STYLE_SUCCESS,
         },
-        free_vpn="🛸 Попробовать бесплатно",
         buy_vpn="🎫 Купить подписку",
         partner_earn="💸 Зарабатывай с нами",
     )
@@ -104,105 +103,112 @@ def keyboard_start():
     )
 
 
-_STYLES_TARIFF = {
-    "r_7": STYLE_PRIMARY,
-    "r_30": STYLE_PRIMARY,
-    "r_90": STYLE_SUCCESS,
-    "r_120": STYLE_SUCCESS,
-    "r_180": STYLE_SUCCESS,
-    "r_3000": STYLE_SUCCESS,
-    "r_white_30": STYLE_PRIMARY,
-    "r_30old": STYLE_PRIMARY,
-    "free_vpn": STYLE_SUCCESS,
-}
+def keyboard_buy_device_tier():
+    return create_kb(
+        1,
+        styles={
+            "buy_tier_3": STYLE_PRIMARY,
+            "buy_tier_5": STYLE_PRIMARY,
+            "buy_tier_10": STYLE_SUCCESS,
+        },
+        buy_tier_3="🔹 Тарифы на 3️⃣ устройства",
+        buy_tier_5="🔸 Тарифы на 5️⃣ устройств",
+        buy_tier_10="🏆 Тарифы на 🔟 устройств",
+        back_to_main=BTN_BACK,
+    )
+
+
+def _styles_buy_duration(devices: int) -> dict[str, str]:
+    st: dict[str, str] = {"back_buy_tier": STYLE_PRIMARY}
+    for months in (1, 3, 6, 12):
+        key = f"r_m{months}_d{devices}"
+        st[key] = STYLE_SUCCESS if months >= 6 else STYLE_PRIMARY
+    return st
+
+
+def keyboard_buy_duration(devices: int) -> InlineKeyboardMarkup:
+    kwargs: dict[str, str] = {}
+    for months in (1, 3, 6, 12):
+        ck = f"r_m{months}_d{devices}"
+        dk = f"m{months}_d{devices}"
+        kwargs[ck] = dct_desc[dk]
+    kwargs["back_buy_tier"] = BTN_BACK
+    return create_kb(1, styles=_styles_buy_duration(devices), **kwargs)
 
 
 def keyboard_tariff_bonus():
     return create_kb(
         1,
-        styles=_STYLES_TARIFF,
-        r_7="🤌 Неделя — 99 руб",
-        r_30="🤝 30 дней — 249 руб",
-        r_90="👌 90 дней — 539 руб (выгода −40%)",
-        r_180="💪 180 дней — 999 руб (выгода −50%)",
-        r_3000="♾️ Навсегда — 3490 руб",
-        # r_white_30="📲 Мобильный тариф — 499 руб",
-        free_vpn="🛸 5 дней бесплатно — на борт!",
+        styles={
+            "buy_tier_3": STYLE_PRIMARY,
+            "buy_tier_5": STYLE_PRIMARY,
+            "buy_tier_10": STYLE_SUCCESS,
+        },
+        buy_tier_3="🔹 Тарифы на 3️⃣ устройства",
+        buy_tier_5="🔸 Тарифы на 5️⃣ устройств",
+        buy_tier_10="🏆 Тарифы на 🔟 устройств",
         back_to_main=BTN_BACK,
     )
 
 
 def keyboard_tariff():
-    return create_kb(
-        1,
-        styles={k: v for k, v in _STYLES_TARIFF.items() if k != "free_vpn"},
-        r_7="🤌 Неделя — 99 руб",
-        r_30="🤝 30 дней — 249 руб",
-        r_90="👌 90 дней — 539 руб (выгода −40%)",
-        r_180="💪 180 дней — 999 руб (выгода −50%)",
-        r_3000="♾️ Навсегда — 3490 руб",
-        #r_white_30="📲 Мобильный тариф — 499 руб",
-        back_to_main=BTN_BACK,
-    )
+    return keyboard_buy_device_tier()
 
 
 def keyboard_tariff_trial():
+    return keyboard_buy_device_tier()
+
+
+def keyboard_gift_device_tier():
     return create_kb(
         1,
-        styles={k: v for k, v in _STYLES_TARIFF.items() if k != "free_vpn"},
-        r_7="🤌 Неделя — 99 руб",
-        r_30="🤝 30 дней — 249 руб",
-        r_90="👌 90 дней — 539 руб (выгода −40%)",
-        r_120="🔥 Акция: 120 дней — 539 руб",
-        r_180="💪 180 дней — 999 руб (выгода −50%)",
-        r_3000="♾️ Навсегда — 3490 руб",
-        # r_white_30="📲 Мобильный тариф — 499 руб",
+        styles={
+            "gift_tier_3": STYLE_PRIMARY,
+            "gift_tier_5": STYLE_PRIMARY,
+            "gift_tier_10": STYLE_SUCCESS,
+        },
+        gift_tier_3="🔹 Тарифы на 3️⃣ устройства",
+        gift_tier_5="🔸 Тарифы на 5️⃣ устройств",
+        gift_tier_10="🏆 Тарифы на 🔟 устройств",
         back_to_main=BTN_BACK,
     )
 
 
-_STYLES_GIFT = {
-    "gift_r_7": STYLE_PRIMARY,
-    "gift_r_30": STYLE_PRIMARY,
-    "gift_r_90": STYLE_SUCCESS,
-    "gift_r_180": STYLE_SUCCESS,
-    "gift_r_3000": STYLE_SUCCESS,
-    "gift_r_white_30": STYLE_PRIMARY,
-}
+def _styles_gift_duration(devices: int) -> dict[str, str]:
+    st: dict[str, str] = {"gift_back_tier": STYLE_PRIMARY}
+    for months in (1, 3, 6, 12):
+        key = f"gift_r_m{months}_d{devices}"
+        st[key] = STYLE_SUCCESS if months >= 6 else STYLE_PRIMARY
+    return st
+
+
+def keyboard_gift_duration(devices: int) -> InlineKeyboardMarkup:
+    kwargs: dict[str, str] = {}
+    for months in (1, 3, 6, 12):
+        ck = f"gift_r_m{months}_d{devices}"
+        dk = f"m{months}_d{devices}"
+        kwargs[ck] = dct_desc[dk]
+    kwargs["gift_back_tier"] = BTN_BACK
+    return create_kb(1, styles=_styles_gift_duration(devices), **kwargs)
 
 
 def keyboard_gift_tariff():
-    return create_kb(
-        1,
-        styles=_STYLES_GIFT,
-        gift_r_7="🤌 Неделя — 99 руб",
-        gift_r_30="🤝 30 дней — 249 руб",
-        gift_r_90="👌 90 дней — 539 руб (выгода −40%)",
-        gift_r_180="💪 180 дней — 999 руб (выгода −50%)",
-        gift_r_3000="♾️ Навсегда — 3490 руб",
-        # gift_r_white_30="📲 Мобильный тариф — 499 руб",
-        back_to_main=BTN_BACK,
-    )
+    return keyboard_gift_device_tier()
 
 
-def keyboard_subscription(sub_url, sub_url_white):
+def keyboard_subscription(links: list[tuple[str, str, str]]) -> InlineKeyboardMarkup:
+    """
+    links: (текст кнопки, https-ссылка на подписку, ключ слота). Только по активным слотам из панели.
+    """
     buttons = []
-    if sub_url:
+    for text, url, _slot in links:
+        if not url:
+            continue
         buttons.append(
             [
                 InlineKeyboardButton(
-                    text="🪐 Подписка Gagarin VPN",
-                    url=sub_url,
-                    style=STYLE_PRIMARY,
-                )
-            ]
-        )
-    if sub_url_white:
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text="📲 Мобильный тариф",
-                    url=sub_url_white,
+                    text=text[:64],
+                    url=url,
                     style=STYLE_PRIMARY,
                 )
             ]
@@ -259,24 +265,15 @@ def keyboard_import_app(os_callback: str):
     )
 
 
-def keyboard_import_sub(app_callback: str, has_casual: bool, has_white: bool):
+def keyboard_import_sub(app_callback: str, slots: list[tuple[str, str]]):
+    """slots: (текст кнопки, суффикс слота: casual | slot_3 | slot_10 | white)."""
     buttons = []
-    if has_casual:
+    for label, slot in slots:
         buttons.append(
             [
                 InlineKeyboardButton(
-                    text="🪐 Подписка Gagarin VPN",
-                    callback_data=f"{app_callback}_casual",
-                    style=STYLE_PRIMARY,
-                )
-            ]
-        )
-    if has_white:
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text="📲 Мобильный тариф",
-                    callback_data=f"{app_callback}_white",
+                    text=label[:64],
+                    callback_data=f"{app_callback}_{slot}",
                     style=STYLE_PRIMARY,
                 )
             ]

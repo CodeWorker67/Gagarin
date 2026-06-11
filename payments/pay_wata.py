@@ -10,7 +10,8 @@ from aiogram.types import CallbackQuery
 from bot import sql
 from config import ADMIN_IDS, BOT_URL, WATA_API_BASE, WATA_API_CARD_KEY, WATA_API_SBP_KEY
 from keyboard import keyboard_payment_sbp, create_kb, BTN_BACK, BTN_PAY_SBP, BTN_PAY_CARD_RF
-from lexicon import dct_price, dct_desc, lexicon
+from lexicon import dct_desc, lexicon, payment_tariff_summary_pro, tariff_rub_and_desc
+from tariff_resolve import device_from_tariff_key, tariff_days_for_x3
 from logging_config import logger
 
 router = Router()
@@ -195,6 +196,7 @@ async def pay(
     user_id: str,
     duration: str,
     white: bool,
+    device: int,
     kind: WataKind,
 ) -> Dict[str, Any]:
     token = WATA_API_SBP_KEY if kind == "sbp" else WATA_API_CARD_KEY
@@ -203,7 +205,10 @@ async def pay(
         return {"status": "error", "url": "", "id": ""}
 
     method = "wata_sbp" if kind == "sbp" else "wata_card"
-    payload = f"user_id:{user_id},duration:{duration},white:{white},gift:False,method:{method},amount:{int(val)}"
+    payload = (
+        f"user_id:{user_id},duration:{duration},white:{white},gift:False,"
+        f"method:{method},amount:{int(val)},device:{device}"
+    )
     order_id = f"{method}-{uuid.uuid4().hex}"
     amount_api = _wata_amount_rub(val)
 
@@ -244,6 +249,7 @@ async def pay_for_gift(
     user_id: str,
     duration: str,
     white: bool,
+    device: int,
     kind: WataKind,
 ) -> Dict[str, Any]:
     token = WATA_API_SBP_KEY if kind == "sbp" else WATA_API_CARD_KEY
@@ -252,7 +258,10 @@ async def pay_for_gift(
         return {"status": "error", "url": "", "id": ""}
 
     method = "wata_sbp" if kind == "sbp" else "wata_card"
-    payload = f"user_id:{user_id},duration:{duration},white:{white},gift:True,method:{method},amount:{int(val)}"
+    payload = (
+        f"user_id:{user_id},duration:{duration},white:{white},gift:True,"
+        f"method:{method},amount:{int(val)},device:{device}"
+    )
     order_id = f"{method}-gift-{uuid.uuid4().hex}"
     amount_api = _wata_amount_rub(val)
 
@@ -301,41 +310,46 @@ async def process_payment_wata_sbp(callback: CallbackQuery):
     data = callback.data
     duration, gift_flag = _duration_from_wata_callback(data, "wata_sbp_r_", "wata_sbp_gift_r_")
     desc_key = duration
-    rub_amount = dct_price[duration]
+    rub_amount, des_text = tariff_rub_and_desc(desc_key)
     if callback.from_user.id in ADMIN_IDS:
         rub_amount = 1
     user_id = str(callback.from_user.id)
     white_flag = False
     if "white" in duration:
-        duration = duration.replace("white_", "")
+        duration_plain = duration.replace("white_", "", 1)
         white_flag = True
-    if "old" in duration:
-        duration = duration.replace("old", "")
+    else:
+        duration_plain = duration
+    days_payload = str(tariff_days_for_x3(duration_plain))
+    device_n = device_from_tariff_key(duration_plain)
 
     if gift_flag:
         payment_info = await pay_for_gift(
             val=str(rub_amount),
-            des=f"Подписка в подарок {dct_desc[desc_key]}",
+            des=f"Подписка в подарок {des_text}",
             user_id=user_id,
-            duration=duration,
+            duration=days_payload,
             white=white_flag,
+            device=device_n,
             kind="sbp",
         )
     else:
         payment_info = await pay(
             val=str(rub_amount),
-            des=dct_desc[desc_key],
+            des=des_text,
             user_id=user_id,
-            duration=duration,
+            duration=days_payload,
             white=white_flag,
+            device=device_n,
             kind="sbp",
         )
 
     if payment_info["status"] == "pending":
         try:
-            text = lexicon["payment_link"]
             if white_flag:
                 text = lexicon["payment_link_white"]
+            else:
+                text = payment_tariff_summary_pro(desc_key)
             if gift_flag:
                 text += "\n\nДля оплаты <b>подарочной подписки</b> перейдите по ссылке:"
             else:
@@ -357,41 +371,46 @@ async def process_payment_wata_card(callback: CallbackQuery):
     data = callback.data
     duration, gift_flag = _duration_from_wata_callback(data, "wata_card_r_", "wata_card_gift_r_")
     desc_key = duration
-    rub_amount = dct_price[duration]
+    rub_amount, des_text = tariff_rub_and_desc(desc_key)
     if callback.from_user.id in ADMIN_IDS:
         rub_amount = 1
     user_id = str(callback.from_user.id)
     white_flag = False
     if "white" in duration:
-        duration = duration.replace("white_", "")
+        duration_plain = duration.replace("white_", "", 1)
         white_flag = True
-    if "old" in duration:
-        duration = duration.replace("old", "")
+    else:
+        duration_plain = duration
+    days_payload = str(tariff_days_for_x3(duration_plain))
+    device_n = device_from_tariff_key(duration_plain)
 
     if gift_flag:
         payment_info = await pay_for_gift(
             val=str(rub_amount),
-            des=f"Подписка в подарок {dct_desc[desc_key]}",
+            des=f"Подписка в подарок {des_text}",
             user_id=user_id,
-            duration=duration,
+            duration=days_payload,
             white=white_flag,
+            device=device_n,
             kind="card",
         )
     else:
         payment_info = await pay(
             val=str(rub_amount),
-            des=dct_desc[desc_key],
+            des=des_text,
             user_id=user_id,
-            duration=duration,
+            duration=days_payload,
             white=white_flag,
+            device=device_n,
             kind="card",
         )
 
     if payment_info["status"] == "pending":
         try:
-            text = lexicon["payment_link"]
             if white_flag:
                 text = lexicon["payment_link_white"]
+            else:
+                text = payment_tariff_summary_pro(desc_key)
             if gift_flag:
                 text += "\n\nДля оплаты <b>подарочной подписки</b> перейдите по ссылке:"
             else:

@@ -1,6 +1,6 @@
 import random
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Optional, Tuple
 
 from bot import sql, x3, bot
 from config import ADMIN_IDS, CHECKER_ID
@@ -10,11 +10,14 @@ import asyncio
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
-from telegram_ids import is_telegram_chat_id
 
 from sheduler.check_connect import check_connect
+from tariff_resolve import panel_username
+from telegram_ids import is_telegram_chat_id
 
 router = Router()
+
+PRO_HWID_DEVICE_LIMIT = 5
 
 _ADD7ALL_PREVIEW_CB = "add7all_preview"
 _ADD7ALL_YES_CB = "add7all_yes"
@@ -71,11 +74,6 @@ def _panel_sub_line(activ_result: dict) -> str:
     return str(t)
 
 
-def _panel_usernames_from_row(row: tuple) -> tuple[str, str]:
-    s = str(int(row[1]))
-    return s, f"{s}_white"
-
-
 def _split_long_text(text: str, limit: int = 3800) -> list[str]:
     if len(text) <= limit:
         return [text]
@@ -85,6 +83,71 @@ def _split_long_text(text: str, limit: int = 3800) -> list[str]:
         parts.append(rest[:limit])
         rest = rest[limit:]
     return parts
+
+
+def _panel_usernames_by_device(user) -> dict[int, str]:
+    tg = int(user.user_id)
+    return {
+        device_slots: panel_username(tg, white=False, device_slots=device_slots)
+        for device_slots in (3, 5, 10)
+    }
+
+
+def _hwid_limit_for_panel_username(username: str) -> int:
+    if "white" in username:
+        return 1
+    if username.endswith("_3"):
+        return 3
+    if username.endswith("_10"):
+        return 10
+    return PRO_HWID_DEVICE_LIMIT
+
+
+def _sub_tier_label(username: str) -> str:
+    if "white" in username:
+        return "white (мобильный)"
+    if username.endswith("_3"):
+        return "3 устройства"
+    if username.endswith("_10"):
+        return "10 устройств"
+    return "5 устройств"
+
+
+def _parse_sub_command(args: list) -> Optional[Tuple[int, str, str]]:
+    """
+    Разбор /sub → (telegram_id, username в панели, date_str).
+    Поддерживает: id, id_3, id_10, id_white и legacy «id white <дата>».
+    """
+    if len(args) < 3:
+        return None
+
+    raw = args[1].strip()
+
+    if args[2].lower() == "white":
+        user_id = int(raw)
+        username = panel_username(user_id, white=True, device_slots=5)
+        date_str = " ".join(args[3:])
+        if not date_str:
+            return None
+        return user_id, username, date_str
+
+    if raw.endswith("_white"):
+        user_id = int(raw[:-6])
+        username = panel_username(user_id, white=True, device_slots=5)
+    elif raw.endswith("_10"):
+        user_id = int(raw[:-3])
+        username = panel_username(user_id, white=False, device_slots=10)
+    elif raw.endswith("_3"):
+        user_id = int(raw[:-2])
+        username = panel_username(user_id, white=False, device_slots=3)
+    else:
+        user_id = int(raw)
+        username = panel_username(user_id, white=False, device_slots=5)
+
+    date_str = " ".join(args[2:])
+    if not date_str:
+        return None
+    return user_id, username, date_str
 
 
 @router.message(F.video, F.from_user.id.in_(ADMIN_IDS))
@@ -137,7 +200,7 @@ async def user_info(message: Message):
 
 @router.message(Command(commands=['pay']))
 async def pay_info_command(message: Message):
-    """Сводка подписок (БД / панель) и успешные платежи пользователя."""
+    """Сводка подписок (БД / панель) по тарифам 3/5/10 устройств и успешные платежи."""
     if message.from_user.id not in ADMIN_IDS:
         return
 
@@ -152,20 +215,26 @@ async def pay_info_command(message: Message):
         await message.answer("❌ ID должен быть числом.")
         return
 
-    user_row = await sql.get_user(target_id)
-    if not user_row:
+    user = await sql.get_user_object_by_user_id(target_id)
+    if not user:
         await message.answer(f"❌ Пользователь {target_id} не найден в базе данных.")
         return
 
-    reg_un, _ = _panel_usernames_from_row(user_row)
-    sub_db = user_row[9]
+    usernames = _panel_usernames_by_device(user)
+    panel_lines: dict[int, str] = {}
+    for device_slots in (3, 5, 10):
+        try:
+            ar = await x3.activ(usernames[device_slots])
+            panel_lines[device_slots] = _panel_sub_line(ar)
+        except Exception as e:
+            logger.exception("/pay: панель %s устройств", device_slots)
+            panel_lines[device_slots] = f"Ошибка: {e}"
 
-    try:
-        ar_reg = await x3.activ(reg_un)
-    except Exception as e:
-        logger.exception("/pay: панель")
-        await message.answer(f"❌ Ошибка запроса к панели: {e}")
-        return
+    db_dates = {
+        3: user.subscription_3_end_date,
+        5: user.subscription_end_date,
+        10: user.subscription_10_end_date,
+    }
 
     pay_rows = await sql.get_user_subscription_payment_report(target_id)
     pay_lines: list[str] = []
@@ -179,8 +248,12 @@ async def pay_info_command(message: Message):
 
     body = (
         f"<b>/pay {target_id}</b>\n\n"
-        f"Подписка в БД бота — {_msk_dt_str(sub_db)}\n"
-        f"Подписка в панели — {_panel_sub_line(ar_reg)}\n\n"
+        f"Подписка в БД бота 3 устройства — {_msk_dt_str(db_dates[3])}\n"
+        f"Подписка в панели — 3 устройства — {panel_lines[3]}\n"
+        f"Подписка в БД бота 5 устройства — {_msk_dt_str(db_dates[5])}\n"
+        f"Подписка в панели — 5 устройства — {panel_lines[5]}\n"
+        f"Подписка в БД бота 10 устройства — {_msk_dt_str(db_dates[10])}\n"
+        f"Подписка в панели — 10 устройства — {panel_lines[10]}\n\n"
         f"<b>Платежи:</b>\n"
     )
     if pay_lines:
@@ -292,47 +365,44 @@ async def partner_remove_command(message: Message):
 
 @router.message(Command(commands=['sub']))
 async def set_subscription_date(message: Message):
-    """Установка subscription_end_date или white_subscription_end_date в БД и панели"""
+    """Установка даты подписки в панели и БД (5 / 3 / 10 устройств, white)."""
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ Эта команда доступна только администраторам.")
         return
 
     try:
         args = message.text.split()
-        if len(args) < 3:
+        parsed = _parse_sub_command(args)
+        if parsed is None:
             await message.answer(
                 "❌ Использование:\n"
-                "  /sub <telegram_id> <дата_время>               – обновить обычную подписку\n"
-                "  /sub <telegram_id> white <дата_время>         – обновить белую подписку\n"
+                "  /sub <telegram_id> <дата_время>             – подписка на 5 устройств\n"
+                "  /sub <telegram_id>_3 <дата_время>           – подписка на 3 устройства\n"
+                "  /sub <telegram_id>_10 <дата_время>          – подписка на 10 устройств\n"
+                "  /sub <telegram_id>_white <дата_время>       – мобильный тариф\n"
+                "  /sub <telegram_id> white <дата_время>       – мобильный тариф (старый формат)\n"
                 "Примеры:\n"
                 "  /sub 123456789 2026-02-01 17:14:27\n"
-                "  /sub 123456789 white 2026-02-01 17:14:27\n"
+                "  /sub 123456789_3 2026-02-01 17:14:27\n"
+                "  /sub 123456789_10 2026-02-01 17:14:27\n"
+                "  /sub 123456789_white 2026-02-01 17:14:27\n"
                 "Формат даты: YYYY-MM-DD HH:MM:SS"
             )
             return
 
-        user_id = int(args[1].strip())
+        user_id, username, date_str = parsed
 
-        # Определяем тип и позицию даты
-        if args[2].lower() == 'white':
-            is_white = True
-            date_str = " ".join(args[3:])
-        else:
-            is_white = False
-            date_str = " ".join(args[2:])
-
-        # Парсим дату
         date_formats = [
             "%Y-%m-%d %H:%M:%S",
             "%Y-%m-%d %H:%M",
             "%d.%m.%Y %H:%M:%S",
-            "%d.%m.%Y %H:%M"
+            "%d.%m.%Y %H:%M",
         ]
         target_date = None
         for fmt in date_formats:
             try:
                 target_date = datetime.strptime(date_str, fmt)
-                target_date = target_date.replace(tzinfo=timezone.utc)  # панель работает в UTC
+                target_date = target_date.replace(tzinfo=timezone.utc)
                 break
             except ValueError:
                 continue
@@ -340,34 +410,29 @@ async def set_subscription_date(message: Message):
             await message.answer(f"❌ Неверный формат даты: {date_str}")
             return
 
-        # Проверяем наличие пользователя в БД
         user_data = await sql.get_user(user_id)
         if not user_data:
             await message.answer("⚠️ Пользователь не найден в БД.")
             return
 
-        # Формируем username для панели
-        username = str(user_id) + ('_white' if is_white else '')
-
-        # Устанавливаем дату в панели
-        success, actual_date = await x3.set_expiration_date(username, target_date, user_id)
+        hw_lim = _hwid_limit_for_panel_username(username)
+        success, actual_date = await x3.set_expiration_date(
+            username, target_date, user_id, hwid_device_limit=hw_lim
+        )
 
         if not success or actual_date is None:
             await message.answer("❌ Не удалось установить дату в панели. Подробности в логах.")
             return
 
-        if is_white:
-            await sql.update_white_subscription_end_date(user_id, actual_date)
-        else:
-            await sql.update_subscription_end_date(user_id, actual_date)
+        await x3._persist_subscription_db(sql, user_id, username, actual_date)
 
-        # Сообщаем результат
         await message.answer(
             f"✅ Дата подписки успешно установлена!\n\n"
             f"👤 Пользователь: {user_id}\n"
+            f"🔑 Клиент в панели: {username}\n"
             f"📅 Целевая дата (UTC): {target_date.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"📅 Установленная в панели дата (UTC): {actual_date.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"📝 Тип: {'white' if is_white else 'обычная'}\n"
+            f"📝 Тариф: {_sub_tier_label(username)}\n"
             f"💾 База данных обновлена."
         )
 

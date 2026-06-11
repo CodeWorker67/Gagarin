@@ -34,6 +34,45 @@ _LEGACY_BILLING_AMOUNT_TO_DAYS: Dict[int, int] = {
 }
 
 
+def pro_subscription_end_active(end_dt: Optional[datetime]) -> bool:
+    if end_dt is None:
+        return False
+    if end_dt.tzinfo is None:
+        aware = end_dt.replace(tzinfo=timezone.utc)
+    else:
+        aware = end_dt.astimezone(timezone.utc)
+    return aware.date() >= datetime.now(timezone.utc).date()
+
+
+def user_has_active_pro_subscription(user: Users) -> bool:
+    """Есть ли активная PRO-подписка хотя бы на одном тарифе (3, 5 или 10 устройств)."""
+    return any(
+        pro_subscription_end_active(dt)
+        for dt in (
+            user.subscription_end_date,
+            user.subscription_3_end_date,
+            user.subscription_10_end_date,
+        )
+    )
+
+
+def resolve_trial_device_slots(user: Users) -> int:
+    """
+    Слот для +7 дней триала:
+    — нет PRO-подписок → 5 устройств;
+    — есть просроченные → тариф с максимальным числом устройств среди просроченных.
+    """
+    tiers = (
+        (5, user.subscription_end_date),
+        (3, user.subscription_3_end_date),
+        (10, user.subscription_10_end_date),
+    )
+    expired = [slots for slots, dt in tiers if dt is not None and not pro_subscription_end_active(dt)]
+    if not expired:
+        return 5
+    return max(expired)
+
+
 def _billing_days_for_tariff_key(key: str) -> Optional[int]:
     if "white" in key:
         return None
@@ -205,21 +244,23 @@ class AsyncSQL:
 
     async def SELECT_USER_IDS_NO_ACTIVE_PRO_SUBSCRIPTION(self) -> List[int]:
         """
-        Не удалены; нет PRO-подписки (subscription_end_date пусто)
-        или она закончилась 2+ календарных дня назад (UTC).
+        Не удалены; для каждого тарифа PRO (3/5/10 устройств):
+        дата пуста (нет подписки) или окончание не позже чем 2 календарных дня назад (UTC).
         """
         today_utc = datetime.now(timezone.utc).date()
         cutoff = today_utc - timedelta(days=2)
-        eligible = or_(
-            Users.subscription_end_date.is_(None),
-            cast(Users.subscription_end_date, Date) <= cutoff,
-        )
+
+        def _tier_eligible(col):
+            return or_(col.is_(None), cast(col, Date) <= cutoff)
+
         async with self.session_factory() as session:
             stmt = (
                 select(Users.user_id)
                 .where(
                     Users.is_delete == False,
-                    eligible,
+                    _tier_eligible(Users.subscription_end_date),
+                    _tier_eligible(Users.subscription_3_end_date),
+                    _tier_eligible(Users.subscription_10_end_date),
                 )
                 .order_by(Users.user_id)
             )
@@ -315,6 +356,30 @@ class AsyncSQL:
     async def update_subscribtion(self, user_id: int, subscribtion: Optional[str]):
         async with self.session_factory() as session:
             stmt = update(Users).where(Users.user_id == user_id).values(subscribtion=subscribtion)
+            await session.execute(stmt)
+            await session.commit()
+
+    async def update_subscription_3_end_date(self, user_id: int, end_date: datetime):
+        async with self.session_factory() as session:
+            stmt = update(Users).where(Users.user_id == user_id).values(subscription_3_end_date=end_date)
+            await session.execute(stmt)
+            await session.commit()
+
+    async def update_subscribtion_3(self, user_id: int, subscribtion: Optional[str]):
+        async with self.session_factory() as session:
+            stmt = update(Users).where(Users.user_id == user_id).values(subscribtion_3=subscribtion)
+            await session.execute(stmt)
+            await session.commit()
+
+    async def update_subscription_10_end_date(self, user_id: int, end_date: datetime):
+        async with self.session_factory() as session:
+            stmt = update(Users).where(Users.user_id == user_id).values(subscription_10_end_date=end_date)
+            await session.execute(stmt)
+            await session.commit()
+
+    async def update_subscribtion_10(self, user_id: int, subscribtion: Optional[str]):
+        async with self.session_factory() as session:
+            stmt = update(Users).where(Users.user_id == user_id).values(subscribtion_10=subscribtion)
             await session.execute(stmt)
             await session.commit()
 
@@ -936,13 +1001,15 @@ class AsyncSQL:
                 await session.rollback()
                 logger.error(f"Error updating broadcast status for user {user_id}: {e}")
 
-    async def activate_gift(self, gift_id: str, recipient_id: int) -> Tuple[bool, Optional[int], Optional[bool]]:
+    async def activate_gift(
+        self, gift_id: str, recipient_id: int
+    ) -> Tuple[bool, Optional[int], Optional[bool], Optional[int], Optional[int]]:
         """
         Активирует подарок по gift_id для указанного получателя.
-        Возвращает (успех, duration, white_flag) или (False, None, None) если подарок не найден или уже активирован.
+        Возвращает (успех, duration, white_flag, giver_id, device_slots) или
+        (False, None, None, None, None) если подарок не найден или уже активирован.
         """
         async with self.session_factory() as session:
-            # Проверяем существование и статус подарка
             stmt = select(Gifts).where(
                 Gifts.gift_id == gift_id,
                 Gifts.flag == False,
@@ -953,19 +1020,20 @@ class AsyncSQL:
 
             if not gift:
                 logger.warning(f"Gift {gift_id} not found or already activated")
-                return False, None, None
+                return False, None, None, None, None
 
-            # Активируем подарок
+            giver_id = int(gift.giver_id)
+            device_slots = gift.device_slots if gift.device_slots is not None else 5
             gift.flag = True
             gift.recepient_id = recipient_id
             try:
                 await session.commit()
                 logger.info(f"Gift {gift_id} activated for user {recipient_id}")
-                return True, gift.duration, gift.white_flag
+                return True, gift.duration, gift.white_flag, giver_id, int(device_slots)
             except Exception as e:
                 await session.rollback()
                 logger.error(f"Error activating gift {gift_id} for user {recipient_id}: {e}")
-                return False, None, None
+                return False, None, None, None, None
 
     async def alloc_fk_api_nonce(self) -> int:
         """
@@ -1229,7 +1297,9 @@ class AsyncSQL:
                 await session.rollback()
                 logger.error(f"❌ Ошибка записи платежа Telegram Stars: {e}")
 
-    async def create_gift(self, giver_id: int, duration: int, white_flag: bool) -> str:
+    async def create_gift(
+        self, giver_id: int, duration: int, white_flag: bool, device_slots: int = 5
+    ) -> str:
         """Создаёт запись о подарке и возвращает gift_id."""
         gift_id = str(uuid.uuid4())
         async with self.session_factory() as session:
@@ -1239,6 +1309,7 @@ class AsyncSQL:
                 duration=duration,
                 recepient_id=None,
                 white_flag=white_flag,
+                device_slots=device_slots,
                 flag=False
             )
             session.add(gift)

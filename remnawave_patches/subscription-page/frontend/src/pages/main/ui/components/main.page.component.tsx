@@ -59,7 +59,20 @@ function subPagePayFromBuild(): { apiBase: string; apiKey: string } {
     }
 }
 
-type DurationId = '7' | '30' | '90' | '180' | '3000' | 'white_30'
+type DurationId =
+    | 'm1_d3' | 'm3_d3' | 'm6_d3' | 'm12_d3'
+    | 'm1_d5' | 'm3_d5' | 'm6_d5' | 'm12_d5'
+    | 'm1_d10' | 'm3_d10' | 'm6_d10' | 'm12_d10'
+    | 'white_30'
+
+type TariffItem = {
+    id: DurationId
+    label: string
+    price: number
+    devices: number
+    savings_pct?: number
+}
+
 type PayMethodId = 'fk_sbp' | 'fk_card' | 'stars' | 'cryptobot'
 
 const PAY_METHODS: ReadonlyArray<{ id: PayMethodId; label: string }> = [
@@ -83,11 +96,26 @@ function parseSubPageUserId(username: string): number | null {
     return Number.isFinite(n) ? n : null
 }
 
+/** Число устройств по суффиксу username страницы подписки. */
+function parseDeviceTier(username: string): 3 | 5 | 10 {
+    if (username.endsWith('_3')) return 3
+    if (username.endsWith('_10')) return 10
+    return 5
+}
+
+function formatTariffButtonLabel(t: TariffItem): string {
+    const savings = t.savings_pct != null ? ` (выгода −${t.savings_pct}%)` : ''
+    return `${t.label} — ${t.price} ₽${savings}`
+}
+
 function SubscriptionPayBlock({ isMobile }: { isMobile: boolean }) {
     const { user } = useSubscription()
     const isWhiteProfile = user.username.includes('_white')
+    const deviceTier = useMemo(() => parseDeviceTier(user.username), [user.username])
     const userId = useMemo(() => parseSubPageUserId(user.username), [user.username])
     const payCfg = useMemo(() => subPagePayFromBuild(), [])
+    const [tariffs, setTariffs] = useState<TariffItem[]>([])
+    const [tariffsLoading, setTariffsLoading] = useState(true)
     const subscriptionStillActive = useMemo(() => {
         if (user.userStatus !== 'ACTIVE') return false
         if (user.daysLeft == null) return true
@@ -109,6 +137,28 @@ function SubscriptionPayBlock({ isMobile }: { isMobile: boolean }) {
         }
         setPayAccordion(subscriptionStillActive ? null : 'pay')
     }, [hasSetupError, subscriptionStillActive])
+
+    useEffect(() => {
+        if (isWhiteProfile) {
+            setTariffs([{
+                id: 'white_30',
+                label: 'Мобильный тариф — 30 дней',
+                price: 499,
+                devices: 1,
+            }])
+            setTariffsLoading(false)
+            return
+        }
+        const base = payCfg.apiBase.replace(/\/$/, '')
+        fetch(`${base}/api/config/tariffs`)
+            .then((r) => (r.ok ? r.json() : []))
+            .then((data: unknown) => {
+                const list = Array.isArray(data) ? (data as TariffItem[]) : []
+                setTariffs(list.filter((t) => t.devices === deviceTier))
+            })
+            .catch(() => setTariffs([]))
+            .finally(() => setTariffsLoading(false))
+    }, [deviceTier, isWhiteProfile, payCfg.apiBase])
 
     const openPay = useCallback((d: DurationId) => {
         setErrorText(null)
@@ -195,13 +245,13 @@ function SubscriptionPayBlock({ isMobile }: { isMobile: boolean }) {
         <Stack gap="sm">
             {tariffBtn('Мобильный тариф — 30 дней — 499 ₽', 'white_30')}
         </Stack>
+    ) : tariffsLoading ? (
+        <Text c="dimmed" size="sm">Загрузка тарифов…</Text>
+    ) : tariffs.length === 0 ? (
+        <Text c="dimmed" size="sm">Тарифы недоступны. Попробуйте позже или оплатите через бота.</Text>
     ) : (
         <Stack gap="sm">
-            {tariffBtn('Пробный тариф — 7 дней — 99 ₽', '7')}
-            {tariffBtn('30 дней — 249 ₽', '30')}
-            {tariffBtn('90 дней — 539 ₽ (выгода −40%)', '90')}
-            {tariffBtn('180 дней — 999 ₽ (выгода −50%)', '180')}
-            {tariffBtn('Навсегда — 3490 ₽', '3000')}
+            {tariffs.map((t) => tariffBtn(formatTariffButtonLabel(t), t.id))}
         </Stack>
     )
 

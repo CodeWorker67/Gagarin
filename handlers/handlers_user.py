@@ -1,3 +1,4 @@
+import re
 import time
 import requests
 from datetime import datetime, timezone
@@ -5,36 +6,43 @@ from datetime import datetime, timezone
 from bot import sql, x3, bot
 from lead_tracker import post_user_registered, post_user_trial, tracker_source_from_ref_and_stamp
 from config import CHANEL_ID, ADMIN_IDS, BOT_URL, PARTNER_PROCENT, PARTNER_MIN, PARTNER_SUPPORT_URL
-from keyboard import (keyboard_start, keyboard_start_bonus, keyboard_tariff_bonus, keyboard_tariff,
-                      keyboard_subscription, ref_keyboard, keyboard_gift_tariff, keyboard_payment_method,
-                      chanel_keyboard, keyboard_inline_ref,
-                      keyboard_partner_intro, keyboard_partner_dashboard, keyboard_partner_withdraw,
-                      create_kb, BTN_BACK, keyboard_sub_after_free, STYLE_PRIMARY)
+from keyboard import (
+    keyboard_start, keyboard_start_bonus, keyboard_tariff_bonus, keyboard_tariff,
+    keyboard_subscription, ref_keyboard, keyboard_gift_tariff, keyboard_payment_method,
+    chanel_keyboard, keyboard_inline_ref,
+    keyboard_partner_intro, keyboard_partner_dashboard, keyboard_partner_withdraw,
+    create_kb, BTN_BACK, keyboard_sub_after_free, STYLE_PRIMARY,
+    keyboard_buy_device_tier, keyboard_buy_duration,
+    keyboard_gift_device_tier, keyboard_gift_duration,
+)
+from config_bd.utils import resolve_trial_device_slots, user_has_active_pro_subscription
 from logging_config import logger
 import asyncio
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, ChatMemberUpdated, InlineQuery, InlineQueryResultArticle, \
     InputTextMessageContent
 from aiogram.filters import ChatMemberUpdatedFilter, KICKED, MEMBER, Command
-from lexicon import lexicon
-
+from lexicon import (
+    buy_text_for_pro_hwid, lexicon, payment_tariff_summary_pro, tariff_desc_key_from_payment_callback,
+)
+from tariff_resolve import panel_username
 
 router: Router = Router()
 
 _TRIAL_RETURN_GET_CB = "trial_return_get"
-_USER_TUPLE_SUBSCRIPTION_END_DATE = 9
 _USER_TUPLE_FIELD_BOOL_3 = 26
+_PRO_HWID_DEVICE_LIMIT = 5
+
+_NEW_DEVICE_TARIFF_RE = re.compile(r'^r_m(1|3|6|12)_d(3|5|10)$')
+_GIFT_DEVICE_TARIFF_RE = re.compile(r'^gift_r_m(1|3|6|12)_d(3|5|10)$')
+REFERRER_REF_BONUS_DAYS = 7
 
 
-def _user_has_active_pro_subscription(user_data: tuple) -> bool:
-    sub_end = user_data[_USER_TUPLE_SUBSCRIPTION_END_DATE]
-    if sub_end is None:
+async def _user_has_active_pro(uid: int) -> bool:
+    user = await sql.get_user_object_by_user_id(uid)
+    if user is None:
         return False
-    if sub_end.tzinfo is None:
-        aware = sub_end.replace(tzinfo=timezone.utc)
-    else:
-        aware = sub_end.astimezone(timezone.utc)
-    return aware.date() >= datetime.now(timezone.utc).date()
+    return user_has_active_pro_subscription(user)
 
 
 async def _panel_regular_subscription_is_active(uid: int) -> bool:
@@ -194,44 +202,62 @@ async def process_start_command(message: Message, command: Command):
 async def buy_vpn_cb(callback: CallbackQuery):
     await callback.answer()
     user_data = await sql.get_user(callback.from_user.id)
-    in_panel = False
+    in_panel = user_data[4] if user_data and len(user_data) > 4 else False
 
-    if user_data is not None and len(user_data) > 4:
-        in_panel = user_data[4]
+    buy_txt = buy_text_for_pro_hwid(_PRO_HWID_DEVICE_LIMIT)
+    text = f'{buy_txt}\n\n{lexicon["choose_tariff"]}'
 
-    result_active = await x3.activ(str(callback.from_user.id))
-
-    if result_active['activ'] == '🔭 - Не подключён' and not in_panel:
-        await callback.message.answer(text=lexicon['buy'],
-                                      reply_markup=keyboard_tariff_bonus(),
-                                      disable_web_page_preview=True)
+    if not in_panel:
+        await callback.message.answer(
+            text=text,
+            reply_markup=keyboard_tariff_bonus(),
+            disable_web_page_preview=True,
+        )
     else:
-        await callback.message.answer(text=lexicon['buy'],
-                                      reply_markup=keyboard_tariff(),
-                                      disable_web_page_preview=True)
+        await callback.message.answer(
+            text=text,
+            reply_markup=keyboard_buy_device_tier(),
+            disable_web_page_preview=True,
+        )
 
 
 @router.callback_query(F.data == 'connect_vpn')
 async def direct_connect_vpn_cb(callback: CallbackQuery):
-    # await x3.test_connect()
-    user_id = str(callback.from_user.id)
-    sub_url = await x3.sublink(user_id)
-    sub_url_white = None
-    user_data = await sql.get_user(callback.from_user.id)
-    if user_data[10]:
-        user_id_white = user_id + '_white'
-        sub_url_white = await x3.sublink(user_id_white)
+    await callback.answer()
+    links = await x3.active_subscription_links(callback.from_user.id)
 
-    if not sub_url and not sub_url_white:
+    if not links:
         await callback.message.answer(lexicon['no_sub'])
         return
 
     await callback.message.answer(
         text=lexicon['to_sub'],
-        reply_markup=keyboard_subscription(sub_url, sub_url_white),
-        disable_web_page_preview=True
+        reply_markup=keyboard_subscription(links),
+        disable_web_page_preview=True,
     )
+
+
+@router.callback_query(F.data.regexp(r'^buy_tier_(3|5|10)$'))
+async def buy_tier_chosen(callback: CallbackQuery):
     await callback.answer()
+    devices = int(callback.data.split('_')[-1])
+    await callback.message.answer(
+        text=lexicon['choose_duration'],
+        reply_markup=keyboard_buy_duration(devices),
+        disable_web_page_preview=True,
+    )
+
+
+@router.callback_query(F.data == 'back_buy_tier')
+async def buy_back_to_tier(callback: CallbackQuery):
+    await callback.answer()
+    buy_txt = buy_text_for_pro_hwid(_PRO_HWID_DEVICE_LIMIT)
+    text = f'{buy_txt}\n\n{lexicon["choose_tariff"]}'
+    await callback.message.answer(
+        text=text,
+        reply_markup=keyboard_buy_device_tier(),
+        disable_web_page_preview=True,
+    )
 
 
 @router.callback_query(F.data == _TRIAL_RETURN_GET_CB)
@@ -246,14 +272,21 @@ async def trial_return_get_cb(callback: CallbackQuery):
         await callback.answer("Вы уже взяли свой триал!", show_alert=True)
         return
 
+    user = await sql.get_user_object_by_user_id(uid)
+    if user is None:
+        await callback.answer("Ошибка профиля. Попробуйте /start.", show_alert=True)
+        return
+
+    device_slots = resolve_trial_device_slots(user)
+    user_id_str = panel_username(uid, white=False, device_slots=device_slots)
+
     await callback.answer()
 
-    user_id_str = str(uid)
     panel_user = await x3.get_user_by_username(user_id_str)
     if panel_user and panel_user.get("response"):
         ok = await x3.updateClient(7, user_id_str, uid)
     else:
-        ok = await x3.addClient(7, user_id_str, uid)
+        ok = await x3.addClient(7, user_id_str, uid, hwid_device_limit=device_slots)
 
     if not ok:
         await callback.message.answer(
@@ -294,27 +327,13 @@ async def secret_tariff_payment(callback: CallbackQuery):
     )
 
 
-@router.callback_query(
-    F.data.in_(
-        {
-            'r_7',
-            'r_30',
-            'r_90',
-            'r_120',
-            'r_180',
-            'r_3000',
-            'r_white_30',
-        }
-    )
-)
+@router.callback_query(F.data.regexp(_NEW_DEVICE_TARIFF_RE))
 async def process_payment_method(callback: CallbackQuery):
     await callback.answer()
-    text = lexicon['payment_link']
-    if 'white' in callback.data:
-        await sql.add_white_counter_if_not_exists(callback.from_user.id)
-        text = lexicon['payment_link_white']
-    text += '\n\nВыберите способ оплаты:'
     tariff = callback.data
+    dk = tariff_desc_key_from_payment_callback(tariff)
+    text = payment_tariff_summary_pro(dk)
+    text += '\n\nВыберите способ оплаты:'
     await callback.message.answer(text, reply_markup=keyboard_payment_method(tariff))
 
 
@@ -474,21 +493,39 @@ async def partner_withdraw(callback: CallbackQuery):
 @router.callback_query(F.data == 'buy_gift')
 async def gift_subscription_start(callback: CallbackQuery):
     await callback.answer()
-    """Начало процесса подарка подписки"""
+    text = f'{lexicon["gift_start"]}\n\n{lexicon["choose_tariff"]}'
     await callback.message.answer(
-        lexicon['gift_start'],
-        reply_markup=keyboard_gift_tariff()
+        text,
+        reply_markup=keyboard_gift_device_tier(),
     )
 
 
-@router.callback_query(F.data.startswith('gift_'))
+@router.callback_query(F.data.regexp(r'^gift_tier_(3|5|10)$'))
+async def gift_tier_chosen(callback: CallbackQuery):
+    await callback.answer()
+    devices = int(callback.data.split('_')[-1])
+    await callback.message.answer(
+        text=lexicon['choose_duration'],
+        reply_markup=keyboard_gift_duration(devices),
+    )
+
+
+@router.callback_query(F.data == 'gift_back_tier')
+async def gift_back_to_tier(callback: CallbackQuery):
+    await callback.answer()
+    text = f'{lexicon["gift_start"]}\n\n{lexicon["choose_tariff"]}'
+    await callback.message.answer(
+        text=text,
+        reply_markup=keyboard_gift_device_tier(),
+    )
+
+
+@router.callback_query(F.data.regexp(_GIFT_DEVICE_TARIFF_RE))
 async def process_gift_payment_method(callback: CallbackQuery):
     await callback.answer()
-    text = lexicon['payment_link']
-    if 'white' in callback.data:
-        await sql.add_white_counter_if_not_exists(callback.from_user.id)
-        text = lexicon['payment_link_white']
     tariff = callback.data
+    dk = tariff_desc_key_from_payment_callback(tariff)
+    text = payment_tariff_summary_pro(dk)
     text += '\n\nВыберите способ оплаты <b>подарочной подписки</b>:'
     await callback.message.answer(text, reply_markup=keyboard_payment_method(tariff))
 
@@ -508,26 +545,30 @@ async def activate_gift(message: Message, gift_id: str):
 
     duration = result[1]
     white_flag = result[2]
+    gift_giver_id = result[3]
+    device_slots = result[4] if result[4] is not None else 5
+    if not white_flag and device_slots not in (3, 5, 10):
+        device_slots = 5
 
-    # Активируем подписку для получателя
-    # await x3.test_connect()
     user_id = message.from_user.id
-    user_id_str = str(message.from_user.id)
-    if white_flag:
-        user_id_str += '_white'
+    user_id_str = panel_username(user_id, white=white_flag, device_slots=device_slots)
+    hw_lim = None if white_flag else device_slots
 
     was_in_db = await sql.get_user(message.from_user.id) is not None
     if not was_in_db:
         await sql.add_user(message.from_user.id, False)
 
-
-    # Проверяем существует ли пользователь
     existing_user = await x3.get_user_by_username(user_id_str)
 
     if existing_user and 'response' in existing_user and existing_user['response']:
         response = await x3.updateClient(duration, user_id_str, user_id)
     else:
-        response = await x3.addClient(duration, user_id_str, user_id)
+        response = await x3.addClient(
+            duration,
+            user_id_str,
+            user_id,
+            hwid_device_limit=hw_lim,
+        )
 
     if response:
         # Получаем информацию о подписке
@@ -566,8 +607,10 @@ async def video_faq(callback: CallbackQuery):
 
 @router.callback_query(F.data == 'back_to_buy_menu')
 async def handle_back_to_menu(callback: CallbackQuery):
-    """Обработчик для возврата в главное меню из оплаты"""
-    await callback.message.answer(text=lexicon['buy'], reply_markup=keyboard_tariff())
+    """Обработчик для возврата в меню покупки из оплаты"""
+    buy_txt = buy_text_for_pro_hwid(_PRO_HWID_DEVICE_LIMIT)
+    text = f'{buy_txt}\n\n{lexicon["choose_tariff"]}'
+    await callback.message.answer(text=text, reply_markup=keyboard_buy_device_tier())
 
 
 @router.callback_query(F.data == 'back_to_main')
@@ -579,9 +622,10 @@ async def handle_back_to_menu(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == 'back_to_gift_menu')
-async def handle_back_to_menu(callback: CallbackQuery):
-    """Обработчик для возврата в главное меню из оплаты"""
-    await callback.message.edit_text(text=lexicon['gift_start'], reply_markup=keyboard_gift_tariff())
+async def handle_back_to_gift_menu(callback: CallbackQuery):
+    """Обработчик для возврата в меню подарков из оплаты"""
+    text = f'{lexicon["gift_start"]}\n\n{lexicon["choose_tariff"]}'
+    await callback.message.edit_text(text=text, reply_markup=keyboard_gift_device_tier())
 
 
 @router.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=KICKED))

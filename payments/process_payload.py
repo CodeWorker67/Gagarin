@@ -8,8 +8,11 @@ from keyboard import create_kb, keyboard_sub_after_buy, BTN_BACK, STYLE_PRIMARY
 from lead_tracker import post_payment_success
 from lexicon import lexicon
 from logging_config import logger
+from tariff_resolve import panel_username
 
-# Индекс поля partner в кортеже AsyncSQL.get_user (0..25 — до field_bool_3 включительно, 26 — bool_3, 27 — partner).
+REFERRER_REF_BONUS_DAYS = 7
+
+# Индекс поля partner в кортеже AsyncSQL.get_user
 _USER_ROW_PARTNER = 27
 
 
@@ -68,7 +71,6 @@ async def _credit_partner_commission(payer_uid: int, method: str, amount: int | 
 async def process_confirmed_payment(payload):
     """Обработка подтвержденного платежа"""
     try:
-        # Парсим payload
         payload_parts = dict(item.split(':', 1) for item in payload.split(','))
         user_id = int(payload_parts.get('user_id', 0))
         raw_duration = str(payload_parts.get('duration', '0') or '0').strip()
@@ -89,30 +91,33 @@ async def process_confirmed_payment(payload):
         else:
             amount = float(payload_parts.get('amount', 0.0))
 
+        device_raw = payload_parts.get('device')
+        try:
+            device_slots = int(device_raw) if device_raw is not None else 5
+        except (TypeError, ValueError):
+            device_slots = 5
+        if device_slots not in (3, 5, 10):
+            device_slots = 5
+
         logger.info(
             f"Обработка подтвержденного платежа для user={user_id}, duration={duration}, white={white_flag}, "
-            f"gift={is_gift}, method={method}, amount={amount}")
+            f"gift={is_gift}, method={method}, amount={amount}, device={device_slots}")
 
-        # Определяем валюту для сообщения
         if method in ['sbp', 'fksbp', 'fk_sbp', 'fk_card', 'card', 'crypto', 'cryptobot', 'wata_sbp', 'wata_card']:
             currency = 'руб'
         elif method == 'stars':
             currency = '⭐️'
-            # Записываем платёж Stars
             await sql.add_payment_stars(user_id, amount, is_gift, payload)
         elif method in ('ton', 'usdt'):
             currency = method.upper()
-            # Платежи крипто уже записаны в payments_cryptobot при создании счета, здесь только обработка
         else:
             currency = ''
 
         if is_gift:
-            # Обработка подарка
-            gift_id = await sql.create_gift(user_id, duration, white_flag)
+            gift_id = await sql.create_gift(user_id, duration, white_flag, device_slots)
             await post_payment_success(user_id, method, amount)
             await _credit_partner_commission(user_id, method, amount)
 
-            # Отправляем сообщение с ссылкой на подарок
             marker = ' (мобильный тариф)' if white_flag else ''
             gift_message = lexicon['payment_gift'].format(duration, marker, gift_id)
 
@@ -122,25 +127,18 @@ async def process_confirmed_payment(payload):
                     text=gift_message,
                     disable_web_page_preview=True
                 )
-
-                # Второе сообщение с инструкцией
                 await bot.send_message(
                     chat_id=user_id,
                     text=lexicon['payment_gift_faq'],
                     reply_markup=create_kb(1, back_to_main=BTN_BACK)
                 )
-
                 logger.info(f"✅ Сообщения о подарке отправлены пользователю {user_id}")
-
             except Exception as e:
                 logger.error(f"❌ Ошибка отправки сообщения о подарке: {e}")
 
         else:
-            # Обработка обычного платежа (не подарок)
-            # await x3.test_connect()
-            user_id_str = str(user_id)
-            if white_flag:
-                user_id_str += '_white'
+            user_id_str = panel_username(user_id, white=white_flag, device_slots=device_slots)
+            hwid_lim = None if white_flag else device_slots
 
             existing_user = await x3.get_user_by_username(user_id_str)
 
@@ -149,7 +147,12 @@ async def process_confirmed_payment(payload):
                 response = await x3.updateClient(duration, user_id_str, user_id)
             else:
                 logger.info(f"➕ Добавляем {user_id_str} на {duration} дней")
-                response = await x3.addClient(duration, user_id_str, user_id)
+                response = await x3.addClient(
+                    duration,
+                    user_id_str,
+                    user_id,
+                    hwid_device_limit=hwid_lim,
+                )
 
             if not response:
                 logger.error(f"❌ Не удалось обновить клиента {user_id_str}")
@@ -158,71 +161,98 @@ async def process_confirmed_payment(payload):
             result_active = await x3.activ(user_id_str)
             subscription_time = result_active.get('time', '-')
 
-            # Обновляем дату окончания подписки в БД
             if subscription_time != '-':
                 try:
                     subscription_end_date = datetime.strptime(subscription_time, '%d-%m-%Y %H:%M МСК')
                     if white_flag:
                         await sql.update_white_subscription_end_date(user_id, subscription_end_date)
+                    elif device_slots == 3:
+                        await sql.update_subscription_3_end_date(user_id, subscription_end_date)
+                    elif device_slots == 10:
+                        await sql.update_subscription_10_end_date(user_id, subscription_end_date)
                     else:
                         await sql.update_subscription_end_date(user_id, subscription_end_date)
                     logger.info(f"✅ Дата подписки обновлена: {subscription_end_date}")
                 except ValueError as e:
                     logger.error(f"❌ Ошибка парсинга даты: {e}")
 
-            # Реферальная система
             try:
                 user_data = await sql.get_user(user_id)
                 if user_data and len(user_data) > 4:
-                    is_pay_null = user_data[8]
+                    referral_gate_done = user_data[8]
                     ref_id_str = user_data[2]
 
-                    if not is_pay_null and ref_id_str:
+                    if not referral_gate_done and ref_id_str:
                         try:
                             ref_id = int(ref_id_str)
                             ref_data = await sql.get_user(ref_id)
 
-                            if ref_data and len(ref_data) > 4:
-                                ref_is_pay_null = ref_data[4]
+                            if ref_data:
+                                bonus_days = REFERRER_REF_BONUS_DAYS
+                                if white_flag:
+                                    ref_username = str(ref_id)
+                                    ref_hwid = 1
+                                else:
+                                    ref_username = panel_username(ref_id, white=False, device_slots=device_slots)
+                                    ref_hwid = device_slots
+                                logger.info(
+                                    f"🎁 Начисляем {bonus_days} дней рефереру {ref_id} "
+                                    f"(username={ref_username})"
+                                )
 
-                                if ref_is_pay_null:
-                                    logger.info(f"🎁 Начисляем 7 дней рефереру {ref_id} за приглашение")
+                                ref_existing = await x3.get_user_by_username(ref_username)
 
-                                    # await x3.test_connect()
-                                    ref_existing = await x3.get_user_by_username(str(ref_id))
+                                if ref_existing and 'response' in ref_existing and ref_existing['response']:
+                                    await x3.updateClient(bonus_days, ref_username, ref_id)
+                                    logger.info(f"✅ Обновлена подписка реферера {ref_id} на {bonus_days} дней")
+                                else:
+                                    ok_ref = await x3.addClient(
+                                        bonus_days,
+                                        ref_username,
+                                        ref_id,
+                                        hwid_device_limit=ref_hwid,
+                                    )
+                                    if ok_ref:
+                                        logger.info(f"✅ Создан клиент реферера {ref_username}, +{bonus_days} дн.")
+                                    else:
+                                        logger.error(f"❌ Не удалось создать клиента реферера {ref_username}")
 
-                                    if ref_existing and 'response' in ref_existing and ref_existing['response']:
-                                        await x3.updateClient(7, str(ref_id), ref_id)
-                                        logger.info(f"✅ Обновлена подписка реферера {ref_id} на 7 дней")
+                                ref_result_active = await x3.activ(ref_username)
+                                ref_subscription_time = ref_result_active.get('time', '-')
 
-                                    ref_result_active = await x3.activ(str(ref_id))
-                                    ref_subscription_time = ref_result_active.get('time', '-')
-
-                                    if ref_subscription_time != '-':
-                                        try:
-                                            ref_subscription_end_date = datetime.strptime(ref_subscription_time,
-                                                                                          '%d-%m-%Y %H:%M МСК')
-                                            await sql.update_subscription_end_date(ref_id, ref_subscription_end_date)
-                                            logger.info(f"✅ Дата подписки реферера обновлена")
-                                        except ValueError as e:
-                                            logger.error(f"❌ Ошибка парсинга даты реферера: {e}")
-
+                                if ref_subscription_time != '-':
                                     try:
-                                        await bot.send_message(
-                                            chat_id=ref_id,
-                                            text=lexicon['ref_success'].format(user_id),
-                                            reply_markup=create_kb(1, back_to_main=BTN_BACK)
+                                        ref_subscription_end_date = datetime.strptime(
+                                            ref_subscription_time,
+                                            '%d-%m-%Y %H:%M МСК',
                                         )
-                                        logger.info(f"✅ Уведомление отправлено рефереру {ref_id}")
-                                    except Exception as e:
-                                        logger.error(f"❌ Ошибка отправки уведомления рефереру: {e}")
+                                        if white_flag:
+                                            await sql.update_subscription_end_date(ref_id, ref_subscription_end_date)
+                                        elif device_slots == 3:
+                                            await sql.update_subscription_3_end_date(ref_id, ref_subscription_end_date)
+                                        elif device_slots == 10:
+                                            await sql.update_subscription_10_end_date(ref_id, ref_subscription_end_date)
+                                        else:
+                                            await sql.update_subscription_end_date(ref_id, ref_subscription_end_date)
+                                        logger.info(f"✅ Дата подписки реферера обновлена ({device_slots} устр.)")
+                                    except ValueError as e:
+                                        logger.error(f"❌ Ошибка парсинга даты реферера: {e}")
+
+                                try:
+                                    await bot.send_message(
+                                        chat_id=ref_id,
+                                        text=lexicon['ref_success'].format(user_id, bonus_days),
+                                        reply_markup=create_kb(1, back_to_main=BTN_BACK)
+                                    )
+                                    logger.info(f"✅ Уведомление отправлено рефереру {ref_id}")
+                                except Exception as e:
+                                    logger.error(f"❌ Ошибка отправки уведомления рефереру: {e}")
 
                         except (ValueError, Exception) as e:
                             logger.error(f"❌ Ошибка при обработке реферальной системы: {e}")
             except Exception as e:
                 logger.error(f"❌ Ошибка при проверке реферальной системы: {e}")
 
-            # Обновляем статус оплаты в БД users
             if await sql.get_user(user_id) is not None:
                 await sql.update_in_panel(user_id)
             else:
@@ -234,11 +264,12 @@ async def process_confirmed_payment(payload):
             await post_payment_success(user_id, method, amount)
             await _credit_partner_commission(user_id, method, amount)
 
-            # Отправляем уведомление пользователю
             try:
                 sub_link = await x3.sublink(user_id_str)
                 marker = 'продлена' if existing_user else 'активирована'
-                message_text = lexicon['payment_success'].format(marker, subscription_time, amount, currency, duration, sub_link)
+                message_text = lexicon['payment_success'].format(
+                    marker, subscription_time, amount, currency, duration, sub_link
+                )
 
                 await bot.send_message(
                     chat_id=user_id,

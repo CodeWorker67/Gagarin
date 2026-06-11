@@ -5,29 +5,12 @@ from logging_config import logger
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, LabeledPrice, PreCheckoutQuery, Message
-from lexicon import lexicon
+from lexicon import dct_price, lexicon, payment_tariff_summary_pro
 from payments.process_payload import process_confirmed_payment
+from tariff_resolve import tariff_days_for_x3, device_from_tariff_key
 
 
 router: Router = Router()
-
-
-def get_stars_amount(currency: str, duration: str) -> float:
-    """Возвращает цену для тарифа в указанной криптовалюте"""
-    prices = {
-        'Stars': {
-            '7': 99,
-            '30': 249,
-            '30secret': 149,
-            '90': 539,
-            '120': 539,
-            '180': 999,
-            '3000': 3490,
-            'white_30': 499,
-            '30old': 99,
-        }
-    }
-    return prices.get(currency, {}).get(duration, 0)
 
 
 @router.callback_query(F.data.startswith('stars_'))
@@ -36,25 +19,36 @@ async def process_payment_stars(callback: CallbackQuery):
     white_flag = False
     if 'gift_' in callback.data:
         gift_flag = True
-    duration = callback.data.replace('stars_r_', '').replace('stars_gift_r_', '')
+    duration_key = callback.data.replace('stars_r_', '').replace('stars_gift_r_', '')
 
-    stars_amount = get_stars_amount('Stars', duration)
+    white_flag = False
+    if 'white' in duration_key:
+        duration_plain = duration_key.replace('white_', '', 1)
+        white_flag = True
+    else:
+        duration_plain = duration_key
+
+    stars_amount = int(dct_price.get(duration_key, 0))
     if callback.from_user.id in ADMIN_IDS:
         stars_amount = 1
     user_id = str(callback.from_user.id)
 
-    if 'white' in duration:
-        duration = duration.replace('white_', '')
-        white_flag = True
-    if 'old' in duration:
-        duration = duration.replace('old', '')
+    days_payload = str(tariff_days_for_x3(duration_plain))
+    device_n = device_from_tariff_key(duration_plain)
 
-    payload = f"user_id:{user_id},duration:{duration},white:{white_flag},gift:{gift_flag},method:stars,amount:{stars_amount}"
+    payload = (
+        f"user_id:{user_id},duration:{days_payload},white:{white_flag},gift:{gift_flag},"
+        f"method:stars,amount:{stars_amount},device:{device_n}"
+    )
 
     prices = [LabeledPrice(label="XTR", amount=stars_amount)]
-    dur_label = "30" if duration == "30secret" else duration
-    title = f"Оплата подписки {'в подарок другу ' if gift_flag else ''}на {dur_label} дней."
-    description = lexicon['payment_link_white'] if white_flag else lexicon['payment_link']
+    title = f"Оплата подписки {'в подарок другу ' if gift_flag else ''}на {days_payload} дней."
+    if white_flag:
+        description = lexicon['payment_link_white']
+    elif duration_plain == '30secret':
+        description = lexicon['payment_link']
+    else:
+        description = payment_tariff_summary_pro(duration_key)
     await bot.send_invoice(
         callback.from_user.id,
         title=title,

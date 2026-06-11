@@ -109,41 +109,49 @@ async def import_select_app(callback: CallbackQuery):
 )
 async def import_select_sub(callback: CallbackQuery):
     await callback.answer()
-    user_data = await sql.get_user(callback.from_user.id)
-    has_casual = has_white = False
-    if user_data:
-        if user_data[9]:
-            has_casual = True
-        if user_data[10]:
-            has_white = True
-
-    if not has_casual and not has_white:
+    links = await x3.active_subscription_links(callback.from_user.id)
+    if not links:
         await callback.message.answer(
             text=lexicon['no_sub'],
             reply_markup=create_kb(1, back_to_main=BTN_BACK)
         )
         return
 
+    slot_map = {
+        'main': 'casual',
+        '3': 'slot_3',
+        '10': 'slot_10',
+        'white': 'white',
+    }
+    slots = [(label, slot_map.get(slot_key, 'casual')) for label, _url, slot_key in links]
+
     await callback.message.answer(
         text=lexicon['import_select_sub'],
-        reply_markup=keyboard_import_sub(callback.data, has_casual, has_white)
+        reply_markup=keyboard_import_sub(callback.data, slots)
     )
 
 
 @router.callback_query(
     F.data.startswith('import_') &
-    (F.data.endswith('_casual') | F.data.endswith('_white'))
+    (F.data.endswith('_casual') | F.data.endswith('_white') | F.data.endswith('_slot_3') | F.data.endswith('_slot_10'))
 )
 async def import_end(callback: CallbackQuery):
     await callback.answer()
-    user_id = str(callback.from_user.id)
+    uid = callback.from_user.id
+    user_id = str(uid)
 
     if callback.data.endswith('_white'):
         sub_url = await x3.sublink(user_id + '_white')
-        label = '📱 Мобильный тариф'
+        label = '📲 Мобильный тариф'
+    elif callback.data.endswith('_slot_3'):
+        sub_url = await x3.sublink(user_id + '_3')
+        label = '🪐 Gagarin VPN · 3 устройства'
+    elif callback.data.endswith('_slot_10'):
+        sub_url = await x3.sublink(user_id + '_10')
+        label = '🪐 Gagarin VPN · 10 устройств'
     else:
         sub_url = await x3.sublink(user_id)
-        label = '🪐 Подписка Gagarin VPN'
+        label = '🪐 Gagarin VPN · 5 устройств'
 
     if not sub_url:
         await callback.message.answer(

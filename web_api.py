@@ -4,13 +4,13 @@ HTTP API для кастомной страницы подписки: FreeKassa 
 Защита: заголовок Authorization: Bearer <SUB_PAGE_API_KEY> или X-Sub-Page-Api-Key
 (переменная окружения SUB_PAGE_API_KEY в .env).
 
-Запуск (отдельно от polling бота):
-  uvicorn web_api:app --host 0.0.0.0 --port 8080
+Публичный каталог тарифов: GET /api/config/tariffs
 """
 from __future__ import annotations
 
+import re
 import time
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from aiogram.types import LabeledPrice
 from fastapi import Depends, FastAPI, HTTPException, Request, Security, status
@@ -30,18 +30,35 @@ from config import (
     WEB_API_PORT,
 )
 from keyboard import keyboard_payment_stars
-from lexicon import dct_desc, dct_price, lexicon
+from lexicon import (
+    TARIFF_SAVINGS_PCT,
+    dct_desc,
+    dct_price,
+    lexicon,
+    payment_tariff_summary_pro,
+    tariff_rub_and_desc,
+)
 from logging_config import logger
 from payments.pay_cryptobot import create_cryptobot_payment
 from payments.pay_freekassa import pay as fk_pay
-from payments.pay_stars import get_stars_amount
+from tariff_resolve import device_from_tariff_key, tariff_days_for_x3
 
 _SUB_PAGE_PAYMENT_SOURCE = "subpage"
 
-DurationId = Literal["7", "30", "90", "180", "3000"]
+DurationId = Literal[
+    "m1_d3", "m3_d3", "m6_d3", "m12_d3",
+    "m1_d5", "m3_d5", "m6_d5", "m12_d5",
+    "m1_d10", "m3_d10", "m6_d10", "m12_d10",
+    "white_30",
+]
 
-# Стандартные тарифы Gagarin VPN — до 5 устройств (см. lexicon «buy» / «payment_link»).
-_SUB_PAGE_DEVICE_COUNT = 5
+_PRO_TARIFF_RE = re.compile(r"^m\d+_d\d+$")
+
+TARIFF_PUBLIC: list[tuple[str, str, int, bool]] = []
+for _devices in (3, 5, 10):
+    for _months, _label in ((1, "1 месяц"), (3, "3 месяца"), (6, "6 месяцев"), (12, "12 месяцев")):
+        _tid = f"m{_months}_d{_devices}"
+        TARIFF_PUBLIC.append((_tid, f"{_label} · {_devices} устройств", _devices, False))
 
 _rate_limits: dict[str, list[float]] = {}
 
@@ -72,6 +89,31 @@ def _parse_cors_origins(raw: Optional[str]) -> list[str]:
     if not raw or not raw.strip():
         return []
     return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def _is_pro_tariff_id(tariff_id: str) -> bool:
+    return bool(_PRO_TARIFF_RE.fullmatch(tariff_id))
+
+
+def _site_tariff_price(tariff_id: str) -> Optional[int]:
+    if tariff_id == "white_30":
+        return int(dct_price.get("white_30", 0))
+    if not _is_pro_tariff_id(tariff_id):
+        return None
+    if tariff_id not in dct_price:
+        return None
+    return int(dct_price[tariff_id])
+
+
+def _tariff_parts(tariff_id: str) -> tuple[str, str, bool, int]:
+    """desc_key, duration_days_str, white, device_slots."""
+    if tariff_id == "white_30":
+        return "white_30", str(tariff_days_for_x3("white_30")), True, 1
+    if not _is_pro_tariff_id(tariff_id):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown tariff")
+    days = str(tariff_days_for_x3(tariff_id))
+    device_n = device_from_tariff_key(tariff_id)
+    return tariff_id, days, False, device_n
 
 
 sub_page_api_key_header = APIKeyHeader(
@@ -112,18 +154,14 @@ class SubPagePayIn(BaseModel):
     duration: DurationId
 
 
-def _rub_for_user(user_id: int, duration: DurationId) -> int:
-    rub = int(dct_price[duration])
+def _subpage_rub(user_id: int, duration: DurationId) -> int:
+    if duration == "white_30":
+        rub = int(dct_price["white_30"])
+    else:
+        rub, _ = tariff_rub_and_desc(duration)
     if user_id in ADMIN_IDS:
         return 1
     return rub
-
-
-def _stars_for_user(user_id: int, duration: DurationId) -> int:
-    n = int(get_stars_amount("Stars", duration))
-    if user_id in ADMIN_IDS:
-        return 1
-    return n
 
 
 async def _bot_deeplink() -> str:
@@ -140,7 +178,7 @@ async def _bot_deeplink() -> str:
 
 app = FastAPI(
     title="Gagarin VPN — API страницы подписки",
-    version="1",
+    version="2",
     swagger_ui_parameters={"persistAuthorization": True},
 )
 
@@ -151,9 +189,30 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=_cors_credentials,
-    allow_methods=["POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Sub-Page-Api-Key"],
 )
+
+
+@app.get("/api/config/tariffs")
+async def config_tariffs():
+    out: list[dict[str, Any]] = []
+    for tid, label, devices, first_only in TARIFF_PUBLIC:
+        price = _site_tariff_price(tid)
+        if price is None:
+            continue
+        item: dict[str, Any] = {
+            "id": tid,
+            "label": label,
+            "price": price,
+            "devices": devices,
+        }
+        if tid in TARIFF_SAVINGS_PCT:
+            item["savings_pct"] = TARIFF_SAVINGS_PCT[tid]
+        if first_only:
+            item["first_payment_only"] = True
+        out.append(item)
+    return out
 
 
 @app.post("/api/v1/sub_page/pay/fk_sbp")
@@ -162,20 +221,19 @@ async def sub_page_pay_fk_sbp(body: SubPagePayIn, request: Request, _: SubPageAu
     if not API_FREEKASSA or SHOP_ID_FREEKASSA is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "FreeKassa не настроена")
 
-    rub = _rub_for_user(body.user_id, body.duration)
-    des = dct_desc[body.duration]
-    uid_str = str(body.user_id)
-    days_panel = body.duration
+    desc_key, duration_str, white, device_n = _tariff_parts(body.duration)
+    rub = _subpage_rub(body.user_id, body.duration)
+    des = dct_desc.get(desc_key, f"Gagarin VPN — {duration_str} дней")
 
     result = await fk_pay(
         val=str(rub),
         des=des,
-        user_id=uid_str,
-        duration=days_panel,
-        white=False,
+        user_id=str(body.user_id),
+        duration=duration_str,
+        white=white,
         ui_kind="sbp",
         source=_SUB_PAGE_PAYMENT_SOURCE,
-        device=_SUB_PAGE_DEVICE_COUNT,
+        device=device_n,
     )
     if result.get("status") != "pending":
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Не удалось создать платёж FreeKassa (СБП)")
@@ -192,20 +250,19 @@ async def sub_page_pay_fk_card(body: SubPagePayIn, request: Request, _: SubPageA
     if not API_FREEKASSA or SHOP_ID_FREEKASSA is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "FreeKassa не настроена")
 
-    rub = _rub_for_user(body.user_id, body.duration)
-    des = dct_desc[body.duration]
-    uid_str = str(body.user_id)
-    days_panel = body.duration
+    desc_key, duration_str, white, device_n = _tariff_parts(body.duration)
+    rub = _subpage_rub(body.user_id, body.duration)
+    des = dct_desc.get(desc_key, f"Gagarin VPN — {duration_str} дней")
 
     result = await fk_pay(
         val=str(rub),
         des=des,
-        user_id=uid_str,
-        duration=days_panel,
-        white=False,
+        user_id=str(body.user_id),
+        duration=duration_str,
+        white=white,
         ui_kind="card",
         source=_SUB_PAGE_PAYMENT_SOURCE,
-        device=_SUB_PAGE_DEVICE_COUNT,
+        device=device_n,
     )
     if result.get("status") != "pending":
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Не удалось создать платёж FreeKassa (карта)")
@@ -220,17 +277,25 @@ async def sub_page_pay_fk_card(body: SubPagePayIn, request: Request, _: SubPageA
 async def sub_page_pay_stars(body: SubPagePayIn, request: Request, _: SubPageAuth):
     _rate_limit_or_raise(request, "stars")
 
-    stars_amount = _stars_for_user(body.user_id, body.duration)
+    desc_key, duration_str, white, device_n = _tariff_parts(body.duration)
+    if body.duration == "white_30":
+        stars_amount = int(dct_price.get("white_30", 0))
+    else:
+        stars_amount = int(dct_price.get(body.duration, 0))
+    if body.user_id in ADMIN_IDS:
+        stars_amount = 1
+
     gift_flag = False
-    white_flag = False
-    days_panel = body.duration
     payload = (
-        f"user_id:{body.user_id},duration:{days_panel},white:{white_flag},gift:{gift_flag},"
-        f"method:stars,amount:{stars_amount},device:{_SUB_PAGE_DEVICE_COUNT},source:{_SUB_PAGE_PAYMENT_SOURCE}"
+        f"user_id:{body.user_id},duration:{duration_str},white:{white},gift:{gift_flag},"
+        f"method:stars,amount:{stars_amount},device:{device_n},source:{_SUB_PAGE_PAYMENT_SOURCE}"
     )
     prices = [LabeledPrice(label="XTR", amount=stars_amount)]
-    title = f"Оплата подписки на {days_panel} дней."
-    description = lexicon["payment_link"]
+    title = f"Оплата подписки на {duration_str} дней."
+    if white:
+        description = lexicon["payment_link_white"]
+    else:
+        description = payment_tariff_summary_pro(desc_key)
 
     try:
         await bot.send_invoice(
@@ -260,19 +325,19 @@ async def sub_page_pay_cryptobot(body: SubPagePayIn, request: Request, _: SubPag
     if not CRYPTOBOT_API_TOKEN:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "CryptoBot не настроен")
 
-    rub = _rub_for_user(body.user_id, body.duration)
-    des = dct_desc[body.duration]
-    days_panel = body.duration
+    desc_key, duration_str, white, device_n = _tariff_parts(body.duration)
+    rub = _subpage_rub(body.user_id, body.duration)
+    des = dct_desc.get(desc_key, f"Gagarin VPN — {duration_str} дней")
 
     result = await create_cryptobot_payment(
         rub_amount=rub,
         description=des,
         user_id=body.user_id,
-        duration=days_panel,
-        white=False,
+        duration=duration_str,
+        white=white,
         is_gift=False,
         source=_SUB_PAGE_PAYMENT_SOURCE,
-        device=_SUB_PAGE_DEVICE_COUNT,
+        device=device_n,
     )
     if result.get("status") != "pending":
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Не удалось создать счёт CryptoBot")

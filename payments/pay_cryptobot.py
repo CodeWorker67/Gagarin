@@ -6,7 +6,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 from bot import sql
 from config import CRYPTOBOT_API_TOKEN, ADMIN_IDS, BOT_URL
 from keyboard import create_kb, BTN_BACK, btn_pay_cryptobot
-from lexicon import lexicon, dct_price, dct_desc
+from lexicon import lexicon, payment_tariff_summary_pro, tariff_rub_and_desc
+from tariff_resolve import device_from_tariff_key, tariff_days_for_x3
 from logging_config import logger
 
 router: Router = Router()
@@ -149,36 +150,38 @@ async def process_payment_crypto(callback: CallbackQuery):
     else:
         duration_key = data.replace('crypto_r_', '')
 
-    rub_amount = dct_price[duration_key]
+    rub_amount, des_text = tariff_rub_and_desc(duration_key)
     desc_key = duration_key
 
     if 'white' in duration_key:
         white_flag = True
-        duration = duration_key.replace('white_', '')
-    elif 'old' in duration_key:
-        duration = duration_key.replace('old', '')
+        duration_plain = duration_key.replace('white_', '', 1)
     else:
-        duration = duration_key
+        duration_plain = duration_key
+
+    days_payload = str(tariff_days_for_x3(duration_plain))
+    device_n = device_from_tariff_key(duration_plain)
 
     if callback.from_user.id in ADMIN_IDS:
         rub_amount = 1
 
     if gift_flag:
-        description = f"Подписка в подарок {dct_desc[desc_key]}"
+        description = f"Подписка в подарок {des_text}"
     else:
-        description = dct_desc[desc_key]
+        description = payment_tariff_summary_pro(desc_key) if not white_flag else lexicon['payment_link_white']
 
     result = await create_cryptobot_payment(
         rub_amount=rub_amount,
         description=description,
         user_id=user_id,
-        duration=duration,
+        duration=days_payload,
         white=white_flag,
-        is_gift=gift_flag
+        is_gift=gift_flag,
+        device=device_n,
     )
 
     if result['status'] == 'pending':
-        text = lexicon['payment_link_white'] if white_flag else lexicon['payment_link']
+        text = lexicon['payment_link_white'] if white_flag else payment_tariff_summary_pro(desc_key)
         if gift_flag:
             text += '\n\nДля оплаты <b>подарочной подписки</b> перейдите по ссылке:'
         else:

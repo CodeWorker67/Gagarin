@@ -28,12 +28,16 @@ _USERS_EXPORT_COLUMNS_DEFAULT = (
     "create_user",
     "reserve_field",
     "subscription_end_date",
+    "subscription_3_end_date",
+    "subscription_10_end_date",
     "white_subscription_end_date",
     "last_notification_date",
     "last_broadcast_status",
     "last_broadcast_date",
     "stamp",
     "ttclid",
+    "subscribtion_3",
+    "subscribtion_10",
     "field_bool_3",
 )
 

@@ -21,19 +21,21 @@ class PushStage:
     window_end: int
     lexicon_key: str
     with_video: bool = False
-    keyboard: str = 'buy_free'
+    keyboard: str = 'buy_only'
 
 
 NOT_SUB_STAGES = (
-    PushStage(30, 60, 'push_not_subscribed_30m'),
-    PushStage(180, 210, 'push_not_subscribed_3h', with_video=True),
-    PushStage(1410, 1440, 'push_not_subscribed_day2_0h'),
-    PushStage(2130, 2160, 'push_not_subscribed_day2_12h'),
-    PushStage(2850, 2880, 'push_not_subscribed_day3_0h'),
-    PushStage(4290, 4320, 'push_not_subscribed_day4_0h'),
-    PushStage(5730, 5760, 'push_not_subscribed_day5_0h'),
-    PushStage(7170, 7200, 'push_not_subscribed_day6_0h'),
-    PushStage(8610, 8640, 'push_not_subscribed_day7_0h'),
+    PushStage(60, 90, 'push_not_subscribed_1h', keyboard='free_activate'),
+    PushStage(180, 210, 'push_not_subscribed_3h', keyboard='free_activate'),
+    PushStage(540, 570, 'push_not_subscribed_9h', keyboard='free_grab'),
+    PushStage(1080, 1110, 'push_not_subscribed_18h', keyboard='free_hurry'),
+    PushStage(1410, 1440, 'push_not_subscribed_day2_0h', keyboard='buy_only'),
+    PushStage(2130, 2160, 'push_not_subscribed_day2_12h', keyboard='buy_only'),
+    PushStage(2850, 2880, 'push_not_subscribed_day3_0h', keyboard='buy_only'),
+    PushStage(4290, 4320, 'push_not_subscribed_day4_0h', keyboard='buy_only'),
+    PushStage(5730, 5760, 'push_not_subscribed_day5_0h', keyboard='buy_only'),
+    PushStage(7170, 7200, 'push_not_subscribed_day6_0h', keyboard='buy_only'),
+    PushStage(8610, 8640, 'push_not_subscribed_day7_0h', keyboard='buy_only'),
 )
 
 NOT_CONNECT_STAGES = (
@@ -51,12 +53,31 @@ def _find_stage(offset_minutes: int, stages: tuple[PushStage, ...]) -> Optional[
 
 
 def _keyboard_for(stage: PushStage):
-    if stage.keyboard == 'buy_free':
+    if stage.keyboard == 'free_activate':
         return create_kb(
             1,
-            styles={'buy_vpn': STYLE_PRIMARY, 'free_vpn': STYLE_SUCCESS},
+            styles={'free_vpn': STYLE_SUCCESS},
+            free_vpn='👍 АКТИВИРОВАТЬ ПОДПИСКУ',
+        )
+    if stage.keyboard == 'free_grab':
+        return create_kb(
+            1,
+            styles={'free_vpn': STYLE_SUCCESS, 'buy_vpn': STYLE_PRIMARY},
+            free_vpn='👍 ЗАБРАТЬ БЕСПЛАТНО (382/500)',
+            buy_vpn='🎫 Купить VPN со скидкой',
+        )
+    if stage.keyboard == 'free_hurry':
+        return create_kb(
+            1,
+            styles={'free_vpn': STYLE_SUCCESS, 'buy_vpn': STYLE_PRIMARY},
+            free_vpn='УСПЕТЬ АКТИВИРОВАТЬ (467/500)',
+            buy_vpn='🎫 Купить VPN со скидкой',
+        )
+    if stage.keyboard == 'buy_only':
+        return create_kb(
+            1,
+            styles={'buy_vpn': STYLE_PRIMARY},
             buy_vpn='🎫 Купить подписку',
-            free_vpn='🛸 Попробовать бесплатно',
         )
     if stage.keyboard == 'connect_mes':
         return create_kb(
@@ -98,7 +119,7 @@ async def _send_push(user_id: int, stage: PushStage) -> None:
 async def send_push_cron(debug: bool = False):
     """
     Push по этапам после регистрации (create_user):
-    1) Нет в панели (in_panel=False) — недельный цикл из 9 сообщений.
+    1) Нет в панели (in_panel=False) — недельный цикл: 4 пуша в 1-й день, 7 пушей со 2-го по 7-й.
     2) В панели, но VPN не подключён (is_connect=False) — суточный цикл из 3 пушей.
     """
     try:
