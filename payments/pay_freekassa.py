@@ -10,8 +10,8 @@ from aiogram.types import CallbackQuery
 from bot import sql
 from config import API_FREEKASSA, SHOP_ID_FREEKASSA, FREEKASSA_SERVER_IP, ADMIN_IDS
 from keyboard import keyboard_payment_sbp, create_kb, BTN_BACK
-from lexicon import dct_desc, lexicon, payment_tariff_summary_pro, tariff_rub_and_desc
-from tariff_resolve import device_from_tariff_key, tariff_days_for_x3
+from lexicon import dct_desc, lexicon, payment_tariff_summary_pro
+from tariff_resolve import device_from_tariff_key, tariff_days_for_x3, tariff_rub_and_desc
 from logging_config import logger
 
 router = Router()

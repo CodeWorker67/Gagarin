@@ -6,8 +6,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 from bot import sql
 from config import CRYPTOBOT_API_TOKEN, ADMIN_IDS, BOT_URL
 from keyboard import create_kb, BTN_BACK, btn_pay_cryptobot
-from lexicon import lexicon, payment_tariff_summary_pro, tariff_rub_and_desc
-from tariff_resolve import device_from_tariff_key, tariff_days_for_x3
+from lexicon import lexicon, payment_tariff_summary_pro
+from tariff_resolve import device_from_tariff_key, tariff_days_for_x3, tariff_rub_and_desc
 from logging_config import logger
 
 router: Router = Router()

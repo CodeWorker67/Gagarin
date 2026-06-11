@@ -10,8 +10,8 @@ from aiogram.types import CallbackQuery
 from bot import sql
 from config import ADMIN_IDS, BOT_URL, WATA_API_BASE, WATA_API_CARD_KEY, WATA_API_SBP_KEY
 from keyboard import keyboard_payment_sbp, create_kb, BTN_BACK, BTN_PAY_SBP, BTN_PAY_CARD_RF
-from lexicon import dct_desc, lexicon, payment_tariff_summary_pro, tariff_rub_and_desc
-from tariff_resolve import device_from_tariff_key, tariff_days_for_x3
+from lexicon import dct_desc, lexicon, payment_tariff_summary_pro
+from tariff_resolve import device_from_tariff_key, tariff_days_for_x3, tariff_rub_and_desc
 from logging_config import logger
 
 router = Router()

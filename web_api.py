@@ -36,12 +36,11 @@ from lexicon import (
     dct_price,
     lexicon,
     payment_tariff_summary_pro,
-    tariff_rub_and_desc,
 )
 from logging_config import logger
 from payments.pay_cryptobot import create_cryptobot_payment
 from payments.pay_freekassa import pay as fk_pay
-from tariff_resolve import device_from_tariff_key, tariff_days_for_x3
+from tariff_resolve import device_from_tariff_key, tariff_days_for_x3, tariff_rub_and_desc
 
 _SUB_PAGE_PAYMENT_SOURCE = "subpage"
 
