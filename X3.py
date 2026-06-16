@@ -3,7 +3,7 @@ import datetime
 import hashlib
 import hmac
 import uuid
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import urllib3
 import aiohttp
@@ -50,6 +50,17 @@ class X3:
         """Закрывает сессию aiohttp (вызывать при завершении работы)."""
         if self._session and not self._session.closed:
             await self._session.close()
+
+    @staticmethod
+    def _hwid_limit_from_username(user_id_str: str) -> Optional[int]:
+        """Лимит устройств по суффиксу username в панели (_3 / _10 / white)."""
+        if 'white' in user_id_str:
+            return None
+        if user_id_str.endswith('_3'):
+            return 3
+        if user_id_str.endswith('_10'):
+            return 10
+        return None
 
     def generate_client_id(self, tg_id, panel_username: str) -> str:
         """shortUuid: HMAC от panel_username (разные слоты — разные id); white — tg_id*100."""
@@ -471,29 +482,109 @@ class X3:
         ("white", "_white", "📲 Мобильный тариф"),
     )
 
+    @staticmethod
+    def _panel_user_from_response(users: Optional[dict]) -> Optional[dict]:
+        if not users or 'response' not in users or not users['response']:
+            return None
+        raw = users['response']
+        return raw[0] if isinstance(raw, list) else raw
+
+    @staticmethod
+    def _panel_user_is_active(user: dict) -> bool:
+        expiry_time_str = user.get('expireAt')
+        if not expiry_time_str:
+            return False
+        expiry_dt = datetime.datetime.fromisoformat(expiry_time_str.replace('Z', '+00:00'))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        expiry_time = int(expiry_dt.timestamp() * 1000)
+        current_time = int(now.timestamp() * 1000)
+        return user.get('status') == 'ACTIVE' and expiry_time > current_time
+
     async def active_subscription_links(self, telegram_id: int) -> List[Tuple[str, str, str]]:
         """Активные подписки в панели: (подпись, url, ключ слота)."""
         out: List[Tuple[str, str, str]] = []
-        now = datetime.datetime.now(datetime.timezone.utc)
         for slot_key, suffix, label in self.SUBSCRIPTION_SLOTS:
             username = f"{telegram_id}{suffix}"
             users = await self.get_user_by_username(username)
-            if not users or 'response' not in users or not users['response']:
-                continue
-            raw = users['response']
-            user = raw[0] if isinstance(raw, list) else raw
-            expiry_time_str = user.get('expireAt')
-            if not expiry_time_str:
-                continue
-            expiry_dt = datetime.datetime.fromisoformat(expiry_time_str.replace('Z', '+00:00'))
-            expiry_time = int(expiry_dt.timestamp() * 1000)
-            current_time = int(now.timestamp() * 1000)
-            if user.get('status') != 'ACTIVE' or expiry_time <= current_time:
+            user = self._panel_user_from_response(users)
+            if not user or not self._panel_user_is_active(user):
                 continue
             url = await self.sublink(username)
             if url:
                 out.append((label, url, slot_key))
         return out
+
+    async def active_subscription_slots(
+        self, telegram_id: int,
+    ) -> List[Tuple[str, str, str, str]]:
+        """Активные подписки: (ключ слота, подпись, uuid в панели, username)."""
+        out: List[Tuple[str, str, str, str]] = []
+        for slot_key, suffix, label in self.SUBSCRIPTION_SLOTS:
+            username = f"{telegram_id}{suffix}"
+            users = await self.get_user_by_username(username)
+            user = self._panel_user_from_response(users)
+            if not user or not self._panel_user_is_active(user):
+                continue
+            user_uuid = user.get('uuid')
+            if not user_uuid:
+                continue
+            out.append((slot_key, label, user_uuid, username))
+        return out
+
+    async def get_user_hwid_devices(self, user_uuid: str) -> Tuple[List[Dict[str, Any]], int]:
+        """Список HWID-устройств пользователя и их количество."""
+        try:
+            session = await self._get_session()
+            async with session.get(
+                f"{self.target_url}/api/hwid/devices/{user_uuid}",
+                params=self.params,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    logger.error(
+                        f"get_user_hwid_devices {user_uuid}: HTTP {resp.status} — {await resp.text()}"
+                    )
+                    return [], 0
+                data = await resp.json()
+        except Exception as e:
+            logger.error(f"get_user_hwid_devices {user_uuid}: {e}")
+            return [], 0
+
+        response = data.get('response') if isinstance(data, dict) else None
+        if isinstance(response, list):
+            devices = response
+            total = len(devices)
+        elif isinstance(response, dict):
+            devices = response.get('devices') or []
+            total = response.get('total', len(devices))
+        else:
+            devices = []
+            total = 0
+        return devices, int(total)
+
+    async def delete_user_hwid_device(self, user_uuid: str, hwid: str) -> bool:
+        """Удаляет одно HWID-устройство пользователя."""
+        try:
+            session = await self._get_session()
+            async with session.post(
+                f"{self.target_url}/api/hwid/devices/delete",
+                json={"userUuid": user_uuid, "hwid": hwid},
+                params=self.params,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    logger.error(
+                        f"delete_user_hwid_device {user_uuid}: HTTP {resp.status} — {await resp.text()}"
+                    )
+                    return False
+                data = await resp.json()
+                if isinstance(data, dict) and data.get('success') is False:
+                    logger.error(f"delete_user_hwid_device API: {data}")
+                    return False
+                return True
+        except Exception as e:
+            logger.error(f"delete_user_hwid_device {user_uuid}: {e}")
+            return False
 
     async def activ(self, user_id: str):
         result = {'activ': '🔭 - Не подключён', 'time': '-'}
@@ -649,7 +740,12 @@ class X3:
 
         user_data = await self.get_user_by_username(username)
         if not user_data or 'response' not in user_data:
-            if not await self.addClient(0, username, user_id, hwid_device_limit=hwid_device_limit):
+            hwid_limit = (
+                hwid_device_limit
+                if hwid_device_limit is not None
+                else self._hwid_limit_from_username(username)
+            )
+            if not await self.addClient(0, username, user_id, hwid_device_limit=hwid_limit):
                 logger.error(f"Не удалось создать пользователя {username} для установки даты")
                 return False, None
             user_data = await self.get_user_by_username(username)

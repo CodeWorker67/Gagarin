@@ -1,23 +1,22 @@
 import random
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Tuple
+from typing import Optional
 
 from bot import sql, x3, bot
 from config import ADMIN_IDS, CHECKER_ID
-from keyboard import create_kb, STYLE_PRIMARY, STYLE_SUCCESS, STYLE_DANGER
+from keyboard import create_kb, STYLE_PRIMARY, STYLE_SUCCESS, STYLE_DANGER, keyboard_sub_after_buy
 from logging_config import logger
 import asyncio
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 
+from lexicon import lexicon
 from sheduler.check_connect import check_connect
 from tariff_resolve import panel_username
 from telegram_ids import is_telegram_chat_id
 
 router = Router()
-
-PRO_HWID_DEVICE_LIMIT = 5
 
 _ADD7ALL_PREVIEW_CB = "add7all_preview"
 _ADD7ALL_YES_CB = "add7all_yes"
@@ -67,11 +66,26 @@ def _msk_dt_str(dt: Optional[datetime]) -> str:
     return aware.astimezone(_MSK).strftime("%d-%m-%Y %H:%M МСК")
 
 
-def _panel_sub_line(activ_result: dict) -> str:
+def _pay_dt_str(dt: Optional[datetime]) -> str:
+    """Формат даты для /pay: YYYY-MM-DD HH:MM:SS (МСК)."""
+    if dt is None:
+        return "Нет"
+    if dt.tzinfo is None:
+        aware = dt.replace(tzinfo=timezone.utc)
+    else:
+        aware = dt.astimezone(timezone.utc)
+    return aware.astimezone(_MSK).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _pay_panel_sub_line(activ_result: dict) -> str:
     t = activ_result.get("time", "-")
     if t in (None, "", "-"):
         return "Нет"
-    return str(t)
+    try:
+        parsed = datetime.strptime(str(t).replace(" МСК", "").strip(), "%d-%m-%Y %H:%M")
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return str(t)
 
 
 def _split_long_text(text: str, limit: int = 3800) -> list[str]:
@@ -93,61 +107,31 @@ def _panel_usernames_by_device(user) -> dict[int, str]:
     }
 
 
-def _hwid_limit_for_panel_username(username: str) -> int:
-    if "white" in username:
-        return 1
-    if username.endswith("_3"):
-        return 3
-    if username.endswith("_10"):
-        return 10
-    return PRO_HWID_DEVICE_LIMIT
-
-
-def _sub_tier_label(username: str) -> str:
-    if "white" in username:
-        return "white (мобильный)"
-    if username.endswith("_3"):
-        return "3 устройства"
-    if username.endswith("_10"):
-        return "10 устройств"
-    return "5 устройств"
-
-
-def _parse_sub_command(args: list) -> Optional[Tuple[int, str, str]]:
+def _parse_sub_target(raw: str) -> tuple[int, str, str]:
     """
-    Разбор /sub → (telegram_id, username в панели, date_str).
-    Поддерживает: id, id_3, id_10, id_white и legacy «id white <дата>».
+    Разбор цели /sub: telegram_id, username в панели, метка тарифа.
+    Примеры: 123456789 → 5 устр.; 123456789_3; 123456789_10; 123456789_white.
     """
-    if len(args) < 3:
-        return None
-
-    raw = args[1].strip()
-
-    if args[2].lower() == "white":
-        user_id = int(raw)
-        username = panel_username(user_id, white=True, device_slots=5)
-        date_str = " ".join(args[3:])
-        if not date_str:
-            return None
-        return user_id, username, date_str
-
+    raw = raw.strip()
     if raw.endswith("_white"):
-        user_id = int(raw[:-6])
-        username = panel_username(user_id, white=True, device_slots=5)
-    elif raw.endswith("_10"):
-        user_id = int(raw[:-3])
-        username = panel_username(user_id, white=False, device_slots=10)
-    elif raw.endswith("_3"):
-        user_id = int(raw[:-2])
-        username = panel_username(user_id, white=False, device_slots=3)
-    else:
-        user_id = int(raw)
-        username = panel_username(user_id, white=False, device_slots=5)
+        tg_id = int(raw[:-6])
+        return tg_id, raw, "white"
+    if raw.endswith("_10"):
+        tg_id = int(raw[:-3])
+        return tg_id, raw, "10"
+    if raw.endswith("_3"):
+        tg_id = int(raw[:-2])
+        return tg_id, raw, "3"
+    tg_id = int(raw)
+    return tg_id, str(tg_id), "5"
 
-    date_str = " ".join(args[2:])
-    if not date_str:
-        return None
-    return user_id, username, date_str
+
+_SUB_TIER_LABELS = {
+    "5": "5 устройств",
+    "3": "3 устройства",
+    "10": "10 устройств",
+    "white": "мобильный (white)",
+}
 
 
 @router.message(F.video, F.from_user.id.in_(ADMIN_IDS))
@@ -200,7 +184,7 @@ async def user_info(message: Message):
 
 @router.message(Command(commands=['pay']))
 async def pay_info_command(message: Message):
-    """Сводка подписок (БД / панель) по тарифам 3/5/10 устройств и успешные платежи."""
+    """Сводка подписок (БД / панель) и успешные платежи пользователя."""
     if message.from_user.id not in ADMIN_IDS:
         return
 
@@ -225,7 +209,7 @@ async def pay_info_command(message: Message):
     for device_slots in (3, 5, 10):
         try:
             ar = await x3.activ(usernames[device_slots])
-            panel_lines[device_slots] = _panel_sub_line(ar)
+            panel_lines[device_slots] = _pay_panel_sub_line(ar)
         except Exception as e:
             logger.exception("/pay: панель %s устройств", device_slots)
             panel_lines[device_slots] = f"Ошибка: {e}"
@@ -239,20 +223,16 @@ async def pay_info_command(message: Message):
     pay_rows = await sql.get_user_subscription_payment_report(target_id)
     pay_lines: list[str] = []
     for tc, kind, days_s in pay_rows:
-        if tc.tzinfo is None:
-            tc_aware = tc.replace(tzinfo=timezone.utc)
-        else:
-            tc_aware = tc.astimezone(timezone.utc)
-        ts = tc_aware.astimezone(_MSK).strftime("%d-%m-%Y %H:%M МСК")
+        ts = _pay_dt_str(tc)
         pay_lines.append(f"• {ts} — {kind} — {days_s} дн.")
 
     body = (
         f"<b>/pay {target_id}</b>\n\n"
-        f"Подписка в БД бота 3 устройства — {_msk_dt_str(db_dates[3])}\n"
+        f"Подписка в БД бота 3 устройства — {_pay_dt_str(db_dates[3])}\n"
         f"Подписка в панели — 3 устройства — {panel_lines[3]}\n"
-        f"Подписка в БД бота 5 устройства — {_msk_dt_str(db_dates[5])}\n"
+        f"Подписка в БД бота 5 устройства — {_pay_dt_str(db_dates[5])}\n"
         f"Подписка в панели — 5 устройства — {panel_lines[5]}\n"
-        f"Подписка в БД бота 10 устройства — {_msk_dt_str(db_dates[10])}\n"
+        f"Подписка в БД бота 10 устройства — {_pay_dt_str(db_dates[10])}\n"
         f"Подписка в панели — 10 устройства — {panel_lines[10]}\n\n"
         f"<b>Платежи:</b>\n"
     )
@@ -262,7 +242,7 @@ async def pay_info_command(message: Message):
         body += "Нет"
 
     for chunk in _split_long_text(body):
-        await message.answer(chunk, parse_mode="HTML")
+        await message.answer(chunk)
 
 
 async def _partner_admin_stats_text(tg_id: int) -> Optional[str]:
@@ -365,32 +345,37 @@ async def partner_remove_command(message: Message):
 
 @router.message(Command(commands=['sub']))
 async def set_subscription_date(message: Message):
-    """Установка даты подписки в панели и БД (5 / 3 / 10 устройств, white)."""
+    """Установка даты подписки в панели и в БД по слоту тарифа (5 / 3 / 10 / white)."""
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ Эта команда доступна только администраторам.")
         return
 
     try:
         args = message.text.split()
-        parsed = _parse_sub_command(args)
-        if parsed is None:
+        if len(args) < 3:
             await message.answer(
                 "❌ Использование:\n"
-                "  /sub <telegram_id> <дата_время>             – подписка на 5 устройств\n"
-                "  /sub <telegram_id>_3 <дата_время>           – подписка на 3 устройства\n"
-                "  /sub <telegram_id>_10 <дата_время>          – подписка на 10 устройств\n"
-                "  /sub <telegram_id>_white <дата_время>       – мобильный тариф\n"
-                "  /sub <telegram_id> white <дата_время>       – мобильный тариф (старый формат)\n"
+                "  /sub <telegram_id> <дата_время>         – подписка 5 устройств\n"
+                "  /sub <telegram_id>_3 <дата_время>       – подписка 3 устройства\n"
+                "  /sub <telegram_id>_10 <дата_время>      – подписка 10 устройств\n"
+                "  /sub <telegram_id>_white <дата_время>   – мобильный тариф\n"
                 "Примеры:\n"
                 "  /sub 123456789 2026-02-01 17:14:27\n"
                 "  /sub 123456789_3 2026-02-01 17:14:27\n"
                 "  /sub 123456789_10 2026-02-01 17:14:27\n"
-                "  /sub 123456789_white 2026-02-01 17:14:27\n"
                 "Формат даты: YYYY-MM-DD HH:MM:SS"
             )
             return
 
-        user_id, username, date_str = parsed
+        try:
+            user_id, username, tier = _parse_sub_target(args[1])
+        except ValueError:
+            await message.answer(
+                "❌ Неверный идентификатор. Используйте telegram_id или telegram_id_3 / _10 / _white."
+            )
+            return
+
+        date_str = " ".join(args[2:])
 
         date_formats = [
             "%Y-%m-%d %H:%M:%S",
@@ -415,25 +400,61 @@ async def set_subscription_date(message: Message):
             await message.answer("⚠️ Пользователь не найден в БД.")
             return
 
-        hw_lim = _hwid_limit_for_panel_username(username)
-        success, actual_date = await x3.set_expiration_date(
-            username, target_date, user_id, hwid_device_limit=hw_lim
-        )
+        try:
+            success, actual_date = await x3.set_expiration_date(username, target_date, user_id)
+        except Exception as e:
+            logger.exception("Ошибка в команде /sub при обращении к панели")
+            await message.answer(
+                f"❌ Ошибка при обращении к панели VPN: {e}\n"
+                "Проверьте доступность панели (PANEL_URL) и повторите команду."
+            )
+            return
 
         if not success or actual_date is None:
-            await message.answer("❌ Не удалось установить дату в панели. Подробности в логах.")
+            panel_ok = await x3.test_connect()
+            hint = (
+                "Панель VPN не отвечает — проверьте PANEL_URL и доступность сервера."
+                if not panel_ok
+                else "Пользователь не найден и не удалось создать, либо панель вернула ошибку."
+            )
+            await message.answer(
+                f"❌ Не удалось установить дату в панели.\n{hint}\nПодробности в логах."
+            )
             return
 
         await x3._persist_subscription_db(sql, user_id, username, actual_date)
 
+        notify_status = ""
+        if is_telegram_chat_id(user_id):
+            try:
+                sub_link = await x3.sublink(username)
+                user_text = lexicon["sub_granted_notify"].format(
+                    tier=_SUB_TIER_LABELS.get(tier, tier),
+                    end_date=_msk_dt_str(actual_date),
+                )
+                await bot.send_message(
+                    user_id,
+                    user_text,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                    reply_markup=keyboard_sub_after_buy(sub_link) if sub_link else None,
+                )
+                notify_status = "\n📨 Пользователь уведомлён."
+            except Exception as e:
+                logger.error(f"/sub: не удалось уведомить user={user_id}: {e}")
+                notify_status = f"\n⚠️ Не удалось уведомить пользователя: {e}"
+        else:
+            notify_status = "\nℹ️ Уведомление не отправлено (не Telegram ID)."
+
         await message.answer(
             f"✅ Дата подписки успешно установлена!\n\n"
             f"👤 Пользователь: {user_id}\n"
-            f"🔑 Клиент в панели: {username}\n"
+            f"🔑 Панель: {username}\n"
             f"📅 Целевая дата (UTC): {target_date.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"📅 Установленная в панели дата (UTC): {actual_date.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"📝 Тариф: {_sub_tier_label(username)}\n"
+            f"📝 Тариф: {_SUB_TIER_LABELS.get(tier, tier)}\n"
             f"💾 База данных обновлена."
+            f"{notify_status}"
         )
 
     except Exception as e:
