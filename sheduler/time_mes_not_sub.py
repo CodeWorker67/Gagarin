@@ -4,6 +4,7 @@ from typing import Optional
 
 from bot import bot, sql
 from config import CHECKER_ID
+from config_bd.utils import user_leading_subscription_end_date
 from keyboard import create_kb, STYLE_PRIMARY, STYLE_SUCCESS
 from lexicon import lexicon
 from logging_config import logger
@@ -121,6 +122,7 @@ async def send_push_cron(debug: bool = False):
     Push по этапам после регистрации (create_user):
     1) Нет в панели (in_panel=False) — недельный цикл: 4 пуша в 1-й день, 7 пушей со 2-го по 7-й.
     2) В панели, но VPN не подключён (is_connect=False) — суточный цикл из 3 пушей.
+       Пуши не отправляются, если самая поздняя дата среди всех подписок уже в прошлом.
     """
     try:
         all_users = await sql.select_all_users()
@@ -140,17 +142,17 @@ async def send_push_cron(debug: bool = False):
             if not is_telegram_chat_id(user_id):
                 continue
             try:
-                user_data = await sql.get_user(user_id)
-                if not user_data:
+                user = await sql.get_user_object_by_user_id(user_id)
+                if not user:
                     continue
 
-                create_time = user_data[6]
+                create_time = user.create_user
                 if not create_time:
                     continue
 
                 minutes_diff = (now - create_time).total_seconds() / 60
-                in_panel = user_data[4]
-                is_connect = user_data[5]
+                in_panel = user.in_panel
+                is_connect = user.is_connect
 
                 if not in_panel:
                     offset = minutes_diff % NOT_SUB_CYCLE_MINUTES
@@ -167,6 +169,10 @@ async def send_push_cron(debug: bool = False):
                             logger.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
 
                 elif not is_connect:
+                    leading_end = user_leading_subscription_end_date(user)
+                    if leading_end is not None and leading_end < now:
+                        continue
+
                     offset = minutes_diff % NOT_CONNECT_CYCLE_MINUTES
                     stage = _find_stage(int(offset), NOT_CONNECT_STAGES)
                     if stage:
