@@ -68,8 +68,8 @@ async def _credit_partner_commission(payer_uid: int, method: str, amount: int | 
         logger.error("❌ Ошибка начисления партнёрского вознаграждения: {}", e)
 
 
-async def process_confirmed_payment(payload):
-    """Обработка подтвержденного платежа"""
+async def process_confirmed_payment(payload) -> bool:
+    """Обработка подтвержденного платежа. True — подписка/подарок применены успешно."""
     try:
         payload_parts = dict(item.split(':', 1) for item in payload.split(','))
         user_id = int(payload_parts.get('user_id', 0))
@@ -79,7 +79,7 @@ async def process_confirmed_payment(payload):
             duration = 30 if secret_tariff else int(raw_duration)
         except ValueError:
             logger.error(f"❌ Некорректный duration в payload: {raw_duration}")
-            return
+            return False
         white_flag = payload_parts.get('white', 'False') == 'True'
         is_gift = payload_parts.get('gift', 'False') == 'True'
         method = payload_parts.get('method', '')
@@ -136,6 +136,8 @@ async def process_confirmed_payment(payload):
             except Exception as e:
                 logger.error(f"❌ Ошибка отправки сообщения о подарке: {e}")
 
+            return True
+
         else:
             user_id_str = panel_username(user_id, white=white_flag, device_slots=device_slots)
             hwid_lim = None if white_flag else device_slots
@@ -156,7 +158,7 @@ async def process_confirmed_payment(payload):
 
             if not response:
                 logger.error(f"❌ Не удалось обновить клиента {user_id_str}")
-                return
+                return False
 
             result_active = await x3.activ(user_id_str)
             subscription_time = result_active.get('time', '-')
@@ -284,5 +286,10 @@ async def process_confirmed_payment(payload):
             except Exception as e:
                 logger.error(f"❌ Ошибка отправки уведомления: {e}")
 
+            return True
+
     except Exception as e:
         logger.error(f"❌ Ошибка обработки подтвержденного платежа: {e}")
+        return False
+
+    return False
