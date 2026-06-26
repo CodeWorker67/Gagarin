@@ -421,7 +421,8 @@ class AsyncSQL:
 
     async def mark_notification_as_sent(self, user_id: int):
         async with self.session_factory() as session:
-            stmt = update(Users).where(Users.user_id == user_id).values(last_notification_date=date.today())
+            utc_today = datetime.now(timezone.utc).date()
+            stmt = update(Users).where(Users.user_id == user_id).values(last_notification_date=utc_today)
             await session.execute(stmt)
             await session.commit()
 
@@ -460,7 +461,7 @@ class AsyncSQL:
     ) -> List[Tuple[int, datetime, bool, Optional[str], Optional[str]]]:
         """
         Строки для sheduler.time_mes без N× get_user: user_id, subscription_end_date,
-        reserve_field (платный тариф), ttclid, field_str_1 (JSON состояния push).
+        in_panel (оплачивал / клава тарифа), ttclid, field_str_1 (JSON состояния push).
 
         Фильтр по времени (как _in_send_window в Python, moment <= now < moment + window):
         — Подписка активна: end попадает в одно из окон «за 7 / 3 / 1 день» или «за 1 час».
@@ -513,7 +514,7 @@ class AsyncSQL:
                 select(
                     Users.user_id,
                     Users.subscription_end_date,
-                    Users.reserve_field,
+                    Users.in_panel,
                     Users.ttclid,
                     Users.field_str_1,
                 )
