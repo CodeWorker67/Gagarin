@@ -18,6 +18,11 @@ router: Router = Router()
 
 OS_CALLBACKS = {'import_android', 'import_ios', 'import_windows', 'import_macos'}
 
+INCY_PHOTOS = [
+    'AgACAgQAAxkBAAEGAAHeakJWWudAqLKZ5_dIHA1sWMPvpQIAAgIPaxvkZxhSZSq3IfxToOUBAAMCAAN4AAM8BA',
+    'AgACAgQAAxkBAAEGAAHgakJWYfFgxRfawmdf1affq-P64cIAAgMPaxvkZxhSwRccR2aDrtQBAAMCAAN4AAM8BA',
+]
+
 HAPP_PHOTOS = [
     'AgACAgIAAxkBAAIBNGnHh6bu6cPkA2oBczmpAgnpw4X4AAKbKmsbI0Y5Sm7IXmng88deAQADAgADeQADOgQ',
     'AgACAgIAAxkBAAIBNmnHh7rLCNHMplfMFZV3FRpp7ZXzAAKcKmsbI0Y5SuH6BPnOd9NUAQADAgADeQADOgQ',
@@ -37,12 +42,16 @@ OS_DISPLAY = {
 }
 
 APP_DISPLAY = {
+    'incy': '🔥 INCY',
     'happ': '✨ Happ',
     'v2': '📶 V2raytun',
 }
 
 IMPORT_URLS = {
     'android': {
+        'incy': {
+            'url_app': 'https://play.google.com/store/apps/details?id=llc.itdev.incy',
+        },
         'happ': {
             'url_app': 'https://play.google.com/store/apps/details?id=com.happproxy',
             'url_import': 'happ://add/{sub_link}',
@@ -53,6 +62,9 @@ IMPORT_URLS = {
         },
     },
     'ios': {
+        'incy': {
+            'url_app': 'https://apps.apple.com/ru/app/incy/id6756943388',
+        },
         'happ': {
             'url_app': 'https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973',
             'url_import': 'happ://add/{sub_link}',
@@ -63,6 +75,9 @@ IMPORT_URLS = {
         },
     },
     'windows': {
+        'incy': {
+            'url_app': 'https://github.com/INCY-DEV/incy-platforms/releases/latest/download/incy-windows-setup.exe',
+        },
         'happ': {
             'url_app': 'https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe',
             'url_import': 'happ://add/{sub_link}',
@@ -73,6 +88,9 @@ IMPORT_URLS = {
         },
     },
     'macos': {
+        'incy': {
+            'url_app': 'https://github.com/INCY-DEV/incy-platforms/releases/latest/download/incy-macos-arm64.dmg',
+        },
         'happ': {
             'url_app': 'https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973',
             'url_import': 'happ://add/{sub_link}',
@@ -105,7 +123,7 @@ async def import_select_app(callback: CallbackQuery):
 
 @router.callback_query(
     F.data.startswith('import_') &
-    (F.data.endswith('_happ') | F.data.endswith('_v2'))
+    (F.data.endswith('_incy') | F.data.endswith('_happ') | F.data.endswith('_v2'))
 )
 async def import_select_sub(callback: CallbackQuery):
     await callback.answer()
@@ -167,7 +185,10 @@ async def import_end(callback: CallbackQuery):
     urls = IMPORT_URLS[os_key][app_key]
     url_app = urls['url_app']
 
-    if app_key == 'happ':
+    if app_key == 'incy':
+        lexicon_key = 'import_end_incy'
+        photos = INCY_PHOTOS
+    elif app_key == 'happ':
         lexicon_key = 'import_end_happ'
         photos = HAPP_PHOTOS
     else:
